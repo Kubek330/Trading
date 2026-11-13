@@ -1,0 +1,4 @@
+# One Solana wallet address per line. Copy to smart_wallets.txt.
+# The analyst counts how many of these are buying (last 60 min) or sit in the
+# top holders. Curate from wallets with a verified track record on fresh coins.
+# If the file is missing, the smart-wallet weight is spread over the other components.

@@ -1,0 +1,5 @@
+requests>=2.31
+# live mode only (signing Jupiter swaps):
+solders>=0.21
+# tests:
+pytest>=8
