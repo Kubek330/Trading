@@ -12,7 +12,9 @@ class BundleChecker:
 
     def bundle_pct(self, mint: str, rug_report: dict | None) -> tuple[float | None, str | None]:
         try:
-            d = self.http.get(f"{self.base}/bundle/bundle_advanced/{mint}", retries=2)
+            # launch bundling is history: cache it for an hour
+            d = self.http.get(f"{self.base}/bundle/bundle_advanced/{mint}", retries=2,
+                              cache_ttl=3600)
             for key in ("total_percentage_bundled", "total_holding_percentage"):
                 v = d.get(key)
                 if v is not None:

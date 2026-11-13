@@ -5,20 +5,23 @@ directory). Defaults implement the desk spec:
 
   scout    pairs 30m-72h old, mcap $300k-$20M (DexScreener)
   filter   kill: mint/freeze authority not revoked, LP not burned/locked,
-           liquidity < 25% of mcap, dev > 3% or past rugs, bundled launch > 10%,
-           already +80% in 1h
+           top-10 holders > 25%, liquidity < 5% of mcap, dev > 3% or past rugs,
+           bundled launch > 10%, already +80% in 1h
   analyst  score 0-100, only >= 70 passes
-  executor max 8% of equity per trade
-  risk     stop -6% set before entry, trailing stop once +12%
+  random   control arm: skips the analyst, picks filter survivors at random
+  executor max 8% of the book's equity per trade
+  risk     stop -15% set before entry; at +35% sell 75%; the rest trails 35%
+           from its peak, never below entry; max hold 48h
+
+Paper trading only. There is no live trading code in this version.
 """
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, fields
 from pathlib import Path
 
-# Hard ceiling that config cannot raise. The executor and risk agents both
-# enforce it independently.
+# Hard ceiling that config cannot raise. Executor and risk enforce it independently.
 HARD_MAX_POSITION_PCT = 8.0
 
 
@@ -30,8 +33,8 @@ def _load_dotenv(path: Path) -> None:
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, _, val = line.partition("=")
-        key, val = key.strip(), val.strip().strip('"').strip("'")
-        os.environ.setdefault(key, val)
+        val = val.split(" #")[0].strip().strip('"').strip("'")
+        os.environ.setdefault(key.strip(), val)
 
 
 def _bool(v: str) -> bool:
@@ -40,10 +43,7 @@ def _bool(v: str) -> bool:
 
 @dataclass
 class Config:
-    # ---- mode -------------------------------------------------------------
-    mode: str = "paper"                      # paper | live
-    live_confirm: str = ""                   # must equal I_UNDERSTAND_REAL_MONEY for live
-    paper_start_usd: float = 1000.0
+    paper_start_usd: float = 1000.0          # per book (scored and random each get this)
     data_dir: str = "data"
 
     # ---- scout ------------------------------------------------------------
@@ -51,15 +51,16 @@ class Config:
     max_age_h: float = 72.0
     min_mcap: float = 300_000.0
     max_mcap: float = 20_000_000.0
-    scout_max_candidates: int = 60           # per cycle, after age/mcap gate
+    scout_max_candidates: int = 40           # per cycle, after the age/mcap gate
     use_geckoterminal_discovery: bool = True
 
     # ---- filter -----------------------------------------------------------
     min_lp_locked_pct: float = 95.0          # LP burned + locked, % of LP supply
-    min_liq_mcap_pct: float = 25.0           # kill if liquidity < this % of mcap
-    max_dev_pct: float = 3.0                 # kill if creator holds > this % of supply
-    max_bundle_pct: float = 10.0             # kill if > this % of supply bundled at launch
-    max_h1_change_pct: float = 80.0          # kill if already up > this in 1h
+    max_top10_pct: float = 25.0              # kill if top-10 holders (ex pools) own > this %
+    min_liq_mcap_pct: float = 5.0            # kill if liquidity < this % of mcap
+    max_dev_pct: float = 3.0
+    max_bundle_pct: float = 10.0
+    max_h1_change_pct: float = 80.0
     fail_closed: bool = True                 # unknown safety data => kill
 
     # ---- analyst ----------------------------------------------------------
@@ -72,31 +73,36 @@ class Config:
     w_smart_wallets: float = 15.0
     smart_wallets_file: str = "smart_wallets.txt"
 
+    # ---- random control ---------------------------------------------------
+    random_control: bool = True              # run the luck baseline alongside
+    random_seed: int = 0                     # 0 = time-based
+
     # ---- executor ---------------------------------------------------------
-    position_pct: float = 8.0                # of equity; clamped to HARD_MAX_POSITION_PCT
+    position_pct: float = 8.0                # of the book's equity; clamped to 8
     max_pool_impact_pct: float = 1.0         # size <= this % of pool liquidity
     min_trade_usd: float = 10.0
-    slippage_bps: int = 300                  # paper fill haircut / live max slippage
-    paper_fee_bps: int = 30
-    max_price_drift_pct: float = 3.0         # re-quote moved more than this since scoring => kill
-    sol_reserve: float = 0.05                # SOL kept for fees (live)
+    slippage_bps: int = 200                  # paper fill haircut each way
+    paper_fee_bps: int = 50                  # paper fee each way (DEX + priority)
+    max_price_drift_pct: float = 3.0
 
     # ---- risk -------------------------------------------------------------
-    stop_pct: float = 6.0
-    trail_activate_pct: float = 12.0
-    trail_pct: float = 6.0                   # trail distance below the high-water mark
-    max_open_positions: int = 5
-    daily_loss_limit_pct: float = 15.0       # halt new entries past this drawdown in a UTC day
-    liq_crash_exit_pct: float = 50.0         # exit if pool liquidity falls this % from entry
-    max_hold_h: float = 48.0                 # 0 disables
+    stop_pct: float = 15.0                   # hard stop below entry, set before entry
+    tp_trigger_pct: float = 35.0             # take-profit trigger
+    tp_sell_pct: float = 75.0                # % of the position sold at the trigger
+    runner_trail_pct: float = 35.0           # remainder trails this far below its peak
+    runner_floor_at_entry: bool = True       # runner stop never below entry
+    max_hold_h: float = 48.0
+    max_open_positions: int = 5              # per book
+    daily_loss_limit_pct: float = 20.0       # halt new entries in a book past this UTC-day drawdown
+    liq_crash_exit_pct: float = 50.0         # rug guard: exit if pool liquidity halves
     reentry_cooldown_h: float = 24.0
 
     # ---- loop -------------------------------------------------------------
-    scan_interval_s: float = 90.0
-    monitor_interval_s: float = 10.0
-    kill_cooldown_min: float = 30.0          # how long a killed mint is skipped
-    score_kill_cooldown_min: float = 10.0    # analyst kills retry sooner
-    report_every_h: float = 6.0              # Grok/Telegram desk report cadence
+    scan_interval_s: float = 120.0
+    monitor_interval_s: float = 15.0
+    kill_cooldown_min: float = 30.0
+    score_kill_cooldown_min: float = 10.0
+    report_every_h: float = 6.0
 
     # ---- data sources -----------------------------------------------------
     solana_rpc_url: str = "https://api.mainnet-beta.solana.com"
@@ -104,33 +110,31 @@ class Config:
     dexscreener_url: str = "https://api.dexscreener.com"
     geckoterminal_url: str = "https://api.geckoterminal.com/api/v2"
     trench_url: str = "https://trench.bot/api"
-    jupiter_url: str = "https://lite-api.jup.ag/swap/v1"
-    http_timeout_s: float = 15.0
+    http_timeout_s: float = 20.0
+    rpc_rpm: int = 40                        # public RPC is strict; stay well under
+
+    # ---- dashboard --------------------------------------------------------
+    dashboard: bool = True
+    dashboard_host: str = "127.0.0.1"
+    dashboard_port: int = 8084
 
     # ---- grok / notifications ----------------------------------------------
     xai_api_key: str = ""
     grok_model: str = "grok-4"
     grok_url: str = "https://api.x.ai/v1"
-    grok_veto: bool = False                  # let Grok veto a 70+ setup (never forces a buy)
+    grok_veto: bool = False
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
-
-    # ---- live wallet ------------------------------------------------------
-    wallet_keypair_path: str = ""            # solana-keygen JSON file (live only)
-
-    extra: dict = field(default_factory=dict)
 
     @classmethod
     def load(cls, env_file: str | Path = ".env") -> "Config":
         _load_dotenv(Path(env_file))
         cfg = cls()
         for f in fields(cls):
-            if f.name == "extra":
-                continue
             raw = os.environ.get(f"DESK_{f.name.upper()}")
             if raw is None and f.name in {"xai_api_key", "telegram_bot_token", "telegram_chat_id"}:
                 raw = os.environ.get(f.name.upper())
-            if raw is None:
+            if raw is None or raw == "":
                 continue
             cur = getattr(cfg, f.name)
             if isinstance(cur, bool):
@@ -141,25 +145,25 @@ class Config:
                 setattr(cfg, f.name, float(raw))
             else:
                 setattr(cfg, f.name, raw)
+        if os.environ.get("DESK_MODE", "paper").lower() != "paper":
+            raise ValueError("This build is paper-only. Remove DESK_MODE or set it to paper.")
         cfg.validate()
         return cfg
 
     def validate(self) -> None:
-        if self.mode not in {"paper", "live"}:
-            raise ValueError(f"DESK_MODE must be paper or live, got {self.mode!r}")
-        if self.mode == "live" and self.live_confirm != "I_UNDERSTAND_REAL_MONEY":
-            raise ValueError(
-                "Live mode needs DESK_LIVE_CONFIRM=I_UNDERSTAND_REAL_MONEY. Run paper first."
-            )
-        if self.mode == "live" and not self.wallet_keypair_path:
-            raise ValueError("Live mode needs DESK_WALLET_KEYPAIR_PATH")
         if self.position_pct <= 0:
             raise ValueError("position_pct must be > 0")
         self.position_pct = min(self.position_pct, HARD_MAX_POSITION_PCT)
-        if self.stop_pct <= 0 or self.trail_pct <= 0:
-            raise ValueError("stop_pct and trail_pct must be > 0")
+        if not 0 < self.stop_pct < 100 or self.runner_trail_pct <= 0:
+            raise ValueError("stop_pct and runner_trail_pct must be > 0")
+        if not 0 < self.tp_sell_pct <= 100 or self.tp_trigger_pct <= 0:
+            raise ValueError("tp_sell_pct must be in (0, 100], tp_trigger_pct > 0")
         if self.min_age_min / 60 >= self.max_age_h or self.min_mcap >= self.max_mcap:
             raise ValueError("scout window is empty")
+
+    @property
+    def books(self) -> list[str]:
+        return ["scored", "random"] if self.random_control else ["scored"]
 
     @property
     def score_weights(self) -> dict[str, float]:

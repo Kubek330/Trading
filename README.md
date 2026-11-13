@@ -1,77 +1,90 @@
 # memedesk
 
-A six-agent Solana memecoin desk that runs unattended overnight. It hunts fresh coins using live on-chain and DEX data, kills anything unsafe, scores what's left, and paper-trades the strongest. Every trade has a stop in place before entry. Grok (xAI) is the desk's voice: it gives a second opinion on setups and writes the morning report.
+A paper-trading Solana memecoin desk that runs overnight on an Android phone (Termux) or any machine with Python 3.10+. It hunts fresh coins using live on-chain and DEX data, kills anything unsafe, and scores what's left. A **Random control** book trades the same filtered coins without scoring, so you can see whether the score beats luck. You can watch everything at **http://127.0.0.1:8084**.
+
+It is paper only: there is no live trading code in this version. It needs no third-party packages, only the standard library.
 
 ```
- scout ──► filter ──► analyst ──► executor ──► risk ──► executor ──► [position]
- (window)  (kills)    (0-100,     (size ≤8%)   (stop     (fill)          │
-                       ≥70 only)               -6% set)                  ▼
-                                         risk monitor every 10s: stop / trail / liq-crash
- logger: every handoff, kill, fill, stop move → data/desk_<mode>.db + .jsonl
+                       ┌─► analyst (score ≥70) ─► executor ─► risk (stop set) ─► executor  [scored book]
+ scout ─► filter ──────┤
+ (window)  (kills)     └─► random (same count)  ─► executor ─► risk (stop set) ─► executor  [random book]
+
+ risk monitor, every 15s, both books, same exits ─► executor (sell)
+ logger: every handoff, kill, fill, partial sell, stop move ─► data/desk_paper.db + .jsonl
 ```
 
-**Hard handoffs.** Each agent accepts one typed object and returns either the next type or a `Kill`. Every object carries a `trail` of the agents that have handled it, and each agent refuses input that skipped the stage before it. The executor will not fill a ticket unless Risk has issued an approval for that exact ticket ID with a stop attached.
+**Hard handoffs.** Each agent accepts one typed object and returns either the next type or a `Kill`. Every object carries a `trail` of the agents that handled it, and an agent refuses input that skipped a stage. The executor fills only a ticket that has a matching Risk approval with the stop already attached.
 
-## The agents
+## Agents
 
-| Agent | Does | Data |
-|---|---|---|
-| **scout** | Finds Solana pairs **30m–72h old** with **mcap $300k–$20M** (deepest SOL/USDC pool per token) | DexScreener (profiles, boosts, `/tokens/v1`), GeckoTerminal trending/new pools for extra discovery |
-| **filter** | Kills a coin if: mint authority isn't revoked · freeze authority isn't revoked · LP isn't burned or locked (≥95%) · liquidity is under 25% of mcap · dev holds more than 3% · dev has past rugs · launch was more than 10% bundled · coin is already up more than 80% in 1h · RugCheck marks it rugged | Solana RPC `getAccountInfo` (authorities, read on-chain) · RugCheck report (LP, creator, holders, rug history) · trench.bot bundle analysis (falls back to RugCheck insiders) |
-| **analyst** | Scores 0–100 from momentum (20), unique buyers (20), buy/sell ratio (15), holder growth (15), liq/mcap (15) and smart wallets (15). **Only scores of 70 or more pass.** If a data point is missing, that part scores 0. Grok can add a note, or a veto if you turn that on | GeckoTerminal trade tape (buyer wallets, USD flow) · DexScreener txns · our own holder snapshots |
-| **executor** | Re-quotes the price, kills the trade if the price has drifted more than 3% or the coin is now up more than 80% in 1h, and sizes the position at **≤8% of equity** (capped in code, so config can't raise it), ≤1% of pool liquidity and ≤ cash | Paper broker or Jupiter (live) |
-| **risk** | Before entry: sets the stop at **-6%**, checks max open positions, skips mints already held, and halts new entries after a 15% daily drawdown. While a position is open: arms a **trailing stop once it's up 12%** (6% below the peak), exits on a liquidity crash (50% drop) or after 48h, and blacklists the creators of rugged coins | DexScreener prices every 10s |
-| **logger** | Logs **every kill** (agent, reason code, detail, data), every handoff, fill, exit and stop move. Holds positions and account state, so a restart picks up where it left off | SQLite + JSONL |
+| Agent | Does |
+|---|---|
+| **scout** | Finds Solana pairs **30m–72h old** with **mcap $300k–$20M**. Pair data comes from DexScreener; discovery also uses DexScreener profiles/boosts and GeckoTerminal's trending and new pools. |
+| **filter** | Kills a coin if: **mint or freeze authority isn't revoked** (read on-chain via RPC) · **LP isn't burned or locked** (≥95%) · **top-10 holders own more than 25%** (pool and AMM vaults excluded) · liquidity is **under 5% of mcap** · **dev holds more than 3%** or has **past rugs** · launch was **more than 10% bundled** · coin is **already up more than 80% in 1h** · coin is marked rugged. If any of this data can't be fetched, the coin is killed. |
+| **analyst** | Scores 0–100 from momentum (20), unique buyers (20), buy/sell ratio (15), holder growth (15), liq/mcap (15) and smart wallets (15). **Only scores of 70 or more pass.** If a data point is missing, that part scores 0. |
+| **random** | The luck baseline. It **skips the Analyst**. Each cycle it draws as many coins as the Analyst passed, uniformly at random from the same cycle's filter survivors, which includes coins the Analyst rejected. They go into a separate $1000 book. |
+| **executor** | Re-quotes the price and sizes the position at **≤8% of that book's equity** (capped in code), ≤1% of pool liquidity and ≤ cash. It fills only with a Risk approval. Paper fills include 2% slippage and 0.5% fees each way. |
+| **risk** | Applies the same exits to both books: **stop −15%**, set before entry · **at +35%, sell 75%** · the remaining **25% trails 35% below its peak, never below entry** · **max hold 48h**. It also has a rug guard (exit if pool liquidity halves or the pool disappears), a cap of 5 open positions per book, and a 20% daily-drawdown halt per book. |
+| **logger** | Logs **every kill** (agent, book, reason code, detail, data), every handoff, fill, partial sell and stop move. Holds positions and per-book cash, so a restart resumes where it stopped. |
 
-## Run it (paper first)
+## Does scoring beat luck?
+
+The dashboard and the report compare the two books: win rate, average and median return per trade, take-profit hits, and equity. They also run a Welch t-test on per-trade returns. Until each book has **20+ closed trades**, the verdict reads "too early". After that, a t-value above 2 means the score is adding edge over the filter alone. A t-value between −2 and 2 means it hasn't shown any edge yet.
+
+## Android (Termux)
+
+Install Termux from F-Droid (the Play Store build is outdated). Then:
 
 ```bash
-pip install -r requirements.txt
-cp .env.example .env              # optional: XAI_API_KEY, TELEGRAM_*, a paid RPC URL
-cp smart_wallets.example.txt smart_wallets.txt   # add wallets you trust
+pkg install -y git python
+git clone <this repo> && cd Trading
+bash scripts/termux.sh setup     # installs python + termux-api, creates .env
+bash scripts/termux.sh start     # takes a wake lock, runs with auto-restart
+```
 
-python -m memedesk once           # one scan cycle, to check that data flows
+Open **http://127.0.0.1:8084** in the phone's browser. Use `bash scripts/termux.sh log` to follow the log and `bash scripts/termux.sh stop` to stop.
+
+To keep it alive overnight: set Android Settings → Apps → Termux → Battery to **Unrestricted**, keep the phone charging, and leave the Termux notification in place (it holds the wake lock).
+
+**Public RPC friendliness.** Every host is paced per minute (Solana RPC at 40/min by default). A 429 response triggers exponential backoff with jitter, honours `Retry-After`, and pauses that host for every thread. Responses are cached:
+- mint authorities: forever once revoked, otherwise 10 minutes
+- RugCheck reports: 5 minutes
+- bundle data: 1 hour
+- discovery feeds: 1–2 minutes
+- trade tapes: 1 minute
+
+The dashboard header shows request, 429 and cache-hit counts.
+
+## Other machines
+
+```bash
+python3 -m memedesk once          # one scan cycle, to check that data flows
 ./scripts/run_overnight.sh        # background loop with auto-restart
-tail -f data/overnight.log
 ```
 
-In the morning:
+## In the morning
 
 ```bash
-python -m memedesk report --hours 12   # Grok writes the brief if XAI_API_KEY is set
+python -m memedesk report --hours 12   # both books + verdict; Grok writes a brief if XAI_API_KEY is set
 python -m memedesk positions
-python -m memedesk kills -n 100        # every kill, with its reason
-sqlite3 data/desk_paper.db "select agent, reason, count(*) from kills group by 1,2 order by 3 desc"
+python -m memedesk kills -n 100
+python -m memedesk dashboard           # dashboard over saved data, no trading
+sqlite3 data/desk_paper.db "select agent, book, reason, count(*) from kills group by 1,2,3 order by 4 desc"
 ```
-
-On a VPS, use `deploy/memedesk.service` (systemd). With `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` set, entries, exits and the reports (every 6h) go to your phone.
-
-## Going live
-
-Only after the paper results hold up over several nights. All three settings are required:
-
-```
-DESK_MODE=live
-DESK_LIVE_CONFIRM=I_UNDERSTAND_REAL_MONEY
-DESK_WALLET_KEYPAIR_PATH=~/.config/solana/desk-hot-wallet.json   # a dedicated hot wallet
-```
-
-Live mode swaps through Jupiter, signs the transaction locally and sends it over your RPC. Fund the hot wallet with only what you're willing to lose. Paper and live keep separate databases.
 
 ## Things to know
 
-- **The "liq 25%" rule is read as liquidity ≥ 25% of mcap.** That's strict: many $2M+ coins sit at 8–15%, so expect this to be the top kill reason. If you meant something else (for example, top-10 holders ≤ 25%), tell me. If you only want to loosen it, change `DESK_MIN_LIQ_MCAP_PCT`.
-- **Holder growth needs 10+ minutes of observation.** On first sighting that part scores 0. The desk snapshots holder counts, and analyst kills retry after 10 min, so a strong coin usually passes on its second look.
-- **Stops are polled, not on-chain orders.** The desk checks prices every 10s, so a coin that gaps down can fill below -6%. Paper mode books the exit at the price it actually saw, not at the stop price.
-- **Paper fills** use the DexScreener price plus 3% slippage plus 0.3% fees each way. Live slippage on thin pools can be worse.
-- The public Solana RPC rate-limits hard, so use a Helius/QuickNode/Triton URL for overnight runs.
-- `DESK_FAIL_CLOSED=true` (the default) kills any coin whose safety data can't be fetched. Don't turn it off for live trading.
-- This is a tool, not financial advice. Most fresh memecoins go to zero.
+- **Holder growth needs 10+ minutes of observation.** On first sighting that part scores 0. Analyst kills are retried after 10 min, so a strong coin usually passes on its second look.
+- **Stops are polled every 15s.** A coin that gaps down can exit well below −15%, and paper mode books the exit at the price it actually saw.
+- **The rug guard (liquidity halving) is an addition to your exit rules.** It applies to both books equally, so the comparison stays fair. To turn it off, set `DESK_LIQ_CRASH_EXIT_PCT=100`.
+- **Smart wallets only count once you list them in `smart_wallets.txt`** (start from `smart_wallets.example.txt`). Until then, that 15 points of weight is spread over the other five parts.
+- The dashboard binds to 127.0.0.1 only. Don't expose it to your network.
+- This is a research tool, not financial advice. Most fresh memecoins go to zero.
 
 ## Tests
 
 ```bash
-python -m pytest -q
+pip install pytest && python -m pytest -q
 ```
 
-The tests run the whole pipeline offline against fake data sources: every filter kill rule, the 8% cap, the -6% stop, the trailing stop, the liquidity-crash exit, the daily halt, enforcement of the handoff order, and the guard on live mode.
+There are 39 offline tests. They cover every filter kill rule (including top-10 holders with the pool vault excluded), the 8% cap, the −15% stop, the +35% partial sell, the runner trailing stop and its floor at entry, the 48h max hold, the Random arm's matched draws from filter survivors, handoff enforcement, the comparison verdicts, the dashboard server, HTTP backoff and caching, and a check that only the standard library is imported.

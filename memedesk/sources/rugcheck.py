@@ -18,7 +18,7 @@ class RugCheck:
         self.http, self.base = http, base.rstrip("/")
 
     def report(self, mint: str) -> dict:
-        return self.http.get(f"{self.base}/tokens/{mint}/report")
+        return self.http.get(f"{self.base}/tokens/{mint}/report", retries=3)
 
 
 def lp_locked_pct(report: dict, pair_address: str | None = None) -> float | None:
@@ -79,3 +79,34 @@ def insider_pct(report: dict) -> float | None:
 
 def holder_owners(report: dict) -> list[str]:
     return [h["owner"] for h in report.get("topHolders") or [] if h.get("owner")]
+
+
+# Account types that hold tokens on behalf of a pool, not a person.
+_POOL_TYPES = {"AMM", "AMM_POOL", "POOL", "BONDING_CURVE", "LP", "LIQUIDITY_POOL"}
+
+
+def _pool_accounts(report: dict) -> set[str]:
+    out: set[str] = set()
+    for m in report.get("markets") or []:
+        for k in ("pubkey", "liquidityAAccount", "liquidityBAccount", "mintLPAccount"):
+            v = m.get(k)
+            if isinstance(v, str):
+                out.add(v)
+            elif isinstance(v, dict) and v.get("pubkey"):
+                out.add(v["pubkey"])
+    for addr, meta in (report.get("knownAccounts") or {}).items():
+        if str((meta or {}).get("type", "")).upper() in _POOL_TYPES:
+            out.add(addr)
+    return out
+
+
+def top10_pct(report: dict) -> float | None:
+    """% of supply held by the 10 largest holders, excluding pool/AMM accounts."""
+    holders = report.get("topHolders")
+    if not holders:
+        return None
+    pools = _pool_accounts(report)
+    people = [h for h in holders
+              if h.get("address") not in pools and h.get("owner") not in pools]
+    pcts = sorted((_num(h.get("pct")) or 0.0 for h in people), reverse=True)
+    return sum(pcts[:10])

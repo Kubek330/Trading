@@ -21,7 +21,7 @@ class GeckoTerminal:
         self.http, self.base = http, base.rstrip("/")
 
     def _pool_mints(self, path: str, params: dict | None = None) -> list[str]:
-        data = self.http.get(f"{self.base}{path}", params=params, headers=HEADERS)
+        data = self.http.get(f"{self.base}{path}", params=params, headers=HEADERS, cache_ttl=120)
         mints = []
         for pool in data.get("data", []):
             tid = (((pool.get("relationships") or {}).get("base_token") or {})
@@ -45,7 +45,7 @@ class GeckoTerminal:
         """Last <=300 swaps on the pool inside the window:
         [{'ts','kind':'buy'|'sell','wallet','usd'}]."""
         data = self.http.get(f"{self.base}/networks/solana/pools/{pool}/trades",
-                             headers=HEADERS)
+                             headers=HEADERS, cache_ttl=60)
         cutoff = time.time() - window_min * 60
         out = []
         for t in data.get("data", []):

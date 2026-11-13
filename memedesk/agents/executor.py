@@ -1,5 +1,6 @@
-"""Executor: sizes a ticket (max 8% of equity), and fills it only after Risk
-has attached a stop. It also closes positions when Risk says so."""
+"""Executor: sizes a ticket (max 8% of the book's equity) and fills it only
+after Risk has attached a stop. It also sells (in part or in full) when Risk says so.
+Paper only."""
 from __future__ import annotations
 
 import logging
@@ -8,12 +9,13 @@ import uuid
 
 from ..config import HARD_MAX_POSITION_PCT, Config
 from ..http import DataError
-from ..models import (Fill, HandoffError, Kill, OrderTicket, Position, RiskApproval,
+from ..models import (HandoffError, Kill, OrderTicket, Position, RandomPick, RiskApproval,
                       Scorecard, require_stage)
 
 log = logging.getLogger("memedesk.executor")
 
 TICKET_TTL_S = 60.0
+UPSTREAM = {"scored": "analyst", "random": "random"}
 
 
 class Executor:
@@ -22,12 +24,15 @@ class Executor:
     def __init__(self, cfg: Config, broker, dex, logger):
         self.cfg, self.broker, self.dex, self.logger = cfg, broker, dex, logger
 
-    def propose(self, sc: Scorecard, equity_usd: float, cash_usd: float) -> OrderTicket | Kill:
-        require_stage(sc, "analyst", self.name)
-        c = sc.vetted.candidate
+    def propose(self, pick: Scorecard | RandomPick, equity_usd: float, cash_usd: float) -> OrderTicket | Kill:
+        book = pick.book
+        if book not in UPSTREAM:
+            raise HandoffError(f"executor: unknown book {book!r}")
+        require_stage(pick, UPSTREAM[book], self.name)
+        c = pick.vetted.candidate
 
         def kill(reason, detail, cooldown=None):
-            return Kill(self.name, c.mint, c.symbol, reason, detail, cooldown_min=cooldown)
+            return Kill(self.name, c.mint, c.symbol, reason, detail, cooldown_min=cooldown, book=book)
 
         try:
             q = self.dex.prices([c.mint]).get(c.mint)
@@ -38,18 +43,17 @@ class Executor:
         px, liq = q["price"], q["liq"]
         drift = 100 * (px / c.price_usd - 1) if c.price_usd else 0.0
         if abs(drift) > self.cfg.max_price_drift_pct:
-            return kill("price_moved", f"moved {drift:+.1f}% since scoring", cooldown=5)
+            return kill("price_moved", f"moved {drift:+.1f}% since vetting", cooldown=5)
         h1 = float((q["pair"].get("priceChange") or {}).get("h1") or 0)
         if h1 > self.cfg.max_h1_change_pct:
             return kill("pumped_1h", f"+{h1:.0f}% in 1h at requote", cooldown=60)
 
         pct = min(self.cfg.position_pct, HARD_MAX_POSITION_PCT)
-        size = equity_usd * pct / 100
-        size = min(size, liq * self.cfg.max_pool_impact_pct / 100, cash_usd)
+        size = min(equity_usd * pct / 100, liq * self.cfg.max_pool_impact_pct / 100, cash_usd)
         if size < self.cfg.min_trade_usd:
             return kill("size_too_small", f"size ${size:.2f} (cash ${cash_usd:.2f}, liq ${liq:,.0f})", cooldown=5)
-        return OrderTicket(scorecard=sc, size_usd=round(size, 2), ref_price=px,
-                           equity_usd=equity_usd, trail=sc.trail + [self.name])
+        return OrderTicket(pick=pick, book=book, size_usd=round(size, 2), ref_price=px,
+                           equity_usd=equity_usd, trail=pick.trail + [self.name])
 
     def execute(self, t: OrderTicket, a: RiskApproval) -> Position:
         require_stage(t, "executor", self.name)
@@ -62,23 +66,29 @@ class Executor:
         if time.time() - t.created_ts > TICKET_TTL_S:
             raise HandoffError("executor: ticket expired")
 
-        c = t.scorecard.vetted.candidate
-        fill: Fill = self.broker.buy(c.mint, t.size_usd, t.ref_price)
-        stop = fill.price * (1 - a.stop_pct / 100)
+        c = t.pick.vetted.candidate
+        fill = self.broker.buy(t.book, t.size_usd, t.ref_price)
         pos = Position(
-            id=uuid.uuid4().hex[:12], mint=c.mint, symbol=c.symbol, pair_address=c.pair_address,
-            mode=self.broker.mode, entry_price=fill.price, qty=fill.qty, cost_usd=fill.usd,
-            stop_price=stop, stop_pct=a.stop_pct, trail_activate_pct=a.trail_activate_pct,
-            trail_pct=a.trail_pct, peak_price=fill.price, entry_liq_usd=c.liquidity_usd,
-            score=t.scorecard.score, opened_ts=time.time(), last_price=fill.price,
-            entry_tx=fill.tx, creator=t.scorecard.vetted.facts.creator or "",
+            id=uuid.uuid4().hex[:12], book=t.book, mint=c.mint, symbol=c.symbol,
+            pair_address=c.pair_address, entry_price=fill.price, initial_qty=fill.qty, qty=fill.qty,
+            cost_usd=fill.usd, stop_price=fill.price * (1 - a.stop_pct / 100),
+            peak_price=fill.price, entry_liq_usd=c.liquidity_usd, score=t.pick.score,
+            opened_ts=time.time(), last_price=fill.price,
+            creator=t.pick.vetted.facts.creator or "",
         )
         self.logger.save_position(pos)
         return pos
 
-    def close(self, pos: Position, ref_price: float, reason: str) -> Position:
-        fill = self.broker.sell(pos, ref_price)
-        pos.status, pos.exit_price, pos.exit_ts = "closed", fill.price, time.time()
-        pos.exit_reason, pos.proceeds_usd, pos.exit_tx = reason, fill.usd, fill.tx
+    def sell(self, pos: Position, fraction: float, ref_price: float, reason: str) -> Position:
+        """Sell `fraction` of what is still held. fraction=1 closes the position."""
+        qty = pos.qty if fraction >= 1 else pos.qty * fraction
+        fill = self.broker.sell(pos.book, qty, ref_price)
+        pos.qty -= qty
+        pos.realized_usd += fill.usd
+        pos.sells.append({"ts": time.time(), "qty": qty, "price": fill.price,
+                          "usd": round(fill.usd, 4), "reason": reason})
+        if fraction >= 1 or pos.qty <= pos.initial_qty * 1e-9:
+            pos.qty = 0.0
+            pos.status, pos.exit_price, pos.exit_ts, pos.exit_reason = "closed", fill.price, time.time(), reason
         self.logger.save_position(pos)
         return pos

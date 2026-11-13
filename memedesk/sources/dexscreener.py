@@ -20,7 +20,7 @@ class DexScreener:
         self.http, self.base = http, base.rstrip("/")
 
     def _mints_from(self, path: str) -> list[str]:
-        data = self.http.get(f"{self.base}{path}")
+        data = self.http.get(f"{self.base}{path}", cache_ttl=60)
         if isinstance(data, dict):
             data = [data]
         return [d["tokenAddress"] for d in data or []

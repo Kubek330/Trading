@@ -1,27 +1,34 @@
-"""Small JSON HTTP client with per-host rate limiting and retries."""
+"""Stdlib-only JSON HTTP client (runs on Termux with no compiled packages).
+
+- per-host request pacing (requests/minute)
+- exponential backoff with jitter on 429/5xx/network errors, honouring Retry-After
+- a 429 puts the whole host in a penalty box, so other threads back off too
+- optional TTL cache for GETs
+"""
 from __future__ import annotations
 
+import json as _json
 import logging
+import random
 import threading
 import time
+import urllib.error
+import urllib.request
 from typing import Any
-from urllib.parse import urlparse
-
-import requests
+from urllib.parse import urlencode, urlparse
 
 log = logging.getLogger("memedesk.http")
 
-# requests per minute, conservative versus each API's published limit
 DEFAULT_RPM = {
-    "api.dexscreener.com": 250,
+    "api.dexscreener.com": 240,
     "api.geckoterminal.com": 25,
-    "api.rugcheck.xyz": 60,
-    "trench.bot": 30,
-    "api.mainnet-beta.solana.com": 80,
-    "lite-api.jup.ag": 50,
+    "api.rugcheck.xyz": 50,
+    "trench.bot": 25,
+    "api.mainnet-beta.solana.com": 40,
     "api.x.ai": 30,
     "api.telegram.org": 20,
 }
+UA = "Mozilla/5.0 (Linux; Android) memedesk/2.0"
 
 
 class DataError(RuntimeError):
@@ -29,53 +36,91 @@ class DataError(RuntimeError):
 
 
 class HttpClient:
-    def __init__(self, timeout: float = 15.0, rpm: dict[str, int] | None = None):
+    def __init__(self, timeout: float = 20.0, rpm: dict[str, int] | None = None,
+                 max_backoff_s: float = 90.0):
         self.timeout = timeout
         self.rpm = {**DEFAULT_RPM, **(rpm or {})}
+        self.max_backoff_s = max_backoff_s
         self._next_slot: dict[str, float] = {}
+        self._penalty: dict[str, float] = {}
+        self._cache: dict[str, tuple[float, Any]] = {}
         self._lock = threading.Lock()
-        self.session = requests.Session()
-        self.session.headers["User-Agent"] = "memedesk/1.0"
+        self.stats = {"requests": 0, "errors": 0, "rate_limited": 0, "cache_hits": 0}
+        self.stop_event = threading.Event()  # set on shutdown: aborts waits immediately
 
-    def _throttle(self, host: str) -> None:
-        rpm = self.rpm.get(host, 60)
-        gap = 60.0 / rpm
+    def _sleep(self, secs: float) -> None:
+        if secs > 0 and self.stop_event.wait(secs):
+            raise DataError("desk shutting down")
+
+    def _wait_turn(self, host: str) -> None:
+        gap = 60.0 / self.rpm.get(host, 60)
         with self._lock:
             now = time.monotonic()
-            slot = max(now, self._next_slot.get(host, now))
+            slot = max(now, self._next_slot.get(host, now), self._penalty.get(host, 0.0))
             self._next_slot[host] = slot + gap
-        wait = slot - time.monotonic()
-        if wait > 0:
-            time.sleep(wait)
+        self._sleep(slot - time.monotonic())
 
-    def request(self, method: str, url: str, *, params=None, json=None,
-                headers=None, retries: int = 3) -> Any:
+    def _backoff(self, host: str, attempt: int, retry_after: str | None, penalize: bool) -> None:
+        if retry_after and retry_after.replace(".", "", 1).isdigit():
+            delay = float(retry_after)
+        else:
+            delay = min(self.max_backoff_s, 2.0 * 2 ** attempt) * (0.7 + 0.6 * random.random())
+        if penalize:
+            with self._lock:
+                self._penalty[host] = max(self._penalty.get(host, 0.0), time.monotonic() + delay)
+        self._sleep(delay)
+
+    def request(self, method: str, url: str, *, params: dict | None = None, json: Any = None,
+                headers: dict | None = None, retries: int = 4, cache_ttl: float = 0.0) -> Any:
+        if params:
+            url = f"{url}{'&' if '?' in url else '?'}{urlencode(params)}"
+        key = f"{method} {url} {_json.dumps(json, sort_keys=True) if json is not None else ''}"
+        if cache_ttl > 0:
+            hit = self._cache.get(key)
+            if hit and hit[0] > time.time():
+                self.stats["cache_hits"] += 1
+                return hit[1]
         host = urlparse(url).hostname or ""
-        last: Exception | None = None
+        hdrs = {"User-Agent": UA, "Accept": "application/json", **(headers or {})}
+        body = None
+        if json is not None:
+            body = _json.dumps(json).encode()
+            hdrs["Content-Type"] = "application/json"
+        last = ""
         for attempt in range(retries):
-            self._throttle(host)
+            if self.stop_event.is_set():
+                raise DataError("desk shutting down")
+            self._wait_turn(host)
+            self.stats["requests"] += 1
+            req = urllib.request.Request(url, data=body, headers=hdrs, method=method)
             try:
-                r = self.session.request(method, url, params=params, json=json,
-                                         headers=headers, timeout=self.timeout)
-            except requests.RequestException as e:
-                last = e
-                time.sleep(1.5 * (attempt + 1))
+                with urllib.request.urlopen(req, timeout=self.timeout) as r:
+                    raw = r.read()
+            except urllib.error.HTTPError as e:
+                if e.code == 429 or e.code >= 500:
+                    self.stats["rate_limited" if e.code == 429 else "errors"] += 1
+                    last = f"HTTP {e.code}"
+                    self._backoff(host, attempt, e.headers.get("Retry-After"), penalize=e.code == 429)
+                    continue
+                self.stats["errors"] += 1
+                detail = e.read()[:200].decode(errors="replace")
+                raise DataError(f"HTTP {e.code} from {host}: {detail}") from None
+            except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as e:
+                self.stats["errors"] += 1
+                last = f"{type(e).__name__}: {e}"
+                self._backoff(host, attempt, None, penalize=False)
                 continue
-            if r.status_code == 429 or r.status_code >= 500:
-                last = DataError(f"{r.status_code} from {host}")
-                retry_after = r.headers.get("Retry-After")
-                time.sleep(float(retry_after) if retry_after and retry_after.isdigit()
-                           else 2.0 * (attempt + 1))
-                continue
-            if r.status_code == 404:
-                raise DataError(f"404 from {url}")
-            if r.status_code >= 400:
-                raise DataError(f"{r.status_code} from {url}: {r.text[:200]}")
             try:
-                return r.json()
-            except ValueError as e:
-                raise DataError(f"non-JSON from {url}") from e
-        raise DataError(f"{method} {url} failed after {retries} tries: {last}")
+                data = _json.loads(raw)
+            except ValueError:
+                raise DataError(f"non-JSON from {host}") from None
+            if cache_ttl > 0:
+                self._cache[key] = (time.time() + cache_ttl, data)
+                if len(self._cache) > 5000:
+                    now = time.time()
+                    self._cache = {k: v for k, v in self._cache.items() if v[0] > now}
+            return data
+        raise DataError(f"{method} {host} failed after {retries} tries: {last}")
 
     def get(self, url: str, **kw) -> Any:
         return self.request("GET", url, **kw)

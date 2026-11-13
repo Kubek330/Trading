@@ -60,6 +60,7 @@ class Filter:
             bundle_pct=bundle_pct,
             bundle_source=bundle_src,
             holders=int(holders) if isinstance(holders, (int, float)) else None,
+            top10_pct=rc.top10_pct(rep) if rep else None,
             top_holder_owners=rc.holder_owners(rep) if rep else [],
             rugcheck_score=(rep or {}).get("score_normalised"),
         )
@@ -114,7 +115,13 @@ class Filter:
             return kill("dev_past_rugs", f"creator {str(f.creator)[:8]}… tied to {f.creator_rugs} rug(s)")
         if self.logger and f.creator and self.logger.get(f"rugger:{f.creator}"):
             return kill("dev_past_rugs", "creator on local rugger blacklist")
-        # 6. bundled launch
+        # 6. concentration: top-10 holders, pools excluded
+        if f.top10_pct is None:
+            if k := unknown("top10"):
+                return k
+        elif f.top10_pct > cfg.max_top10_pct:
+            return kill("top10_heavy", f"top-10 holders own {f.top10_pct:.1f}% > {cfg.max_top10_pct:.0f}%")
+        # 7. bundled launch
         if f.bundle_pct is None:
             if k := unknown("bundle"):
                 return k
@@ -127,7 +134,7 @@ class Filter:
         h1 = c.price_change.get("h1", 0.0)
         if h1 > self.cfg.max_h1_change_pct or c.liq_mcap_pct < self.cfg.min_liq_mcap_pct:
             # market-data kills need no on-chain calls
-            return self.check(c, SafetyFacts(None, None, None, None, None, None, None, None, None))
+            return self.check(c, SafetyFacts(*([None] * 9)))
         facts = self.gather(c)
         rep = self._cache.get(c.mint, (0, {}))[1]
         k = self.check(c, facts, rugged=bool(rep.get("rugged")))

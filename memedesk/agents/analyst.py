@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import logging
 import math
-import time
 from pathlib import Path
 
 from ..config import Config
@@ -147,7 +146,7 @@ class Analyst:
             return Kill(self.name, c.mint, c.symbol, "score_low",
                         f"score {score:.0f} < {self.cfg.min_score:.0f}",
                         data={"score": round(score, 1), "components": comps, "raw": raw},
-                        cooldown_min=self.cfg.score_kill_cooldown_min)
+                        cooldown_min=self.cfg.score_kill_cooldown_min, book="scored")
 
         grok_note = ""
         if self.grok and self.grok.enabled:
@@ -160,7 +159,7 @@ class Analyst:
             if veto and self.cfg.grok_veto:
                 return Kill(self.name, c.mint, c.symbol, "grok_veto", grok_note,
                             data={"score": round(score, 1), "components": comps},
-                            cooldown_min=self.cfg.score_kill_cooldown_min)
+                            cooldown_min=self.cfg.score_kill_cooldown_min, book="scored")
 
         return Scorecard(vetted=v, score=round(score, 1), components=comps,
                          notes=notes + [f"raw={raw}"], grok_note=grok_note,
