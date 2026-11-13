@@ -1,16 +1,21 @@
 """The desk: wires the agents with hard handoffs and runs them overnight. Paper only.
 
-  scout -> filter -+-> analyst -> executor -> risk(stop) -> executor(fill)   [scored book]
-                   +-> random  -> executor -> risk(stop) -> executor(fill)   [random book]
+  whale scout (every 30 min: winners -> early wallets -> top 50)
+     └─ whale mode: 2+ tracked wallets buy the same token within 10 min ─┐
+  scout ─────────────────────────────────────────────────────────────────┴─► filter
+  filter -+-> analyst -> executor -> risk(stop) -> executor(fill)   [scored book]
+          +-> random  -> executor -> risk(stop) -> executor(fill)   [random book]
   risk monitor (both books, same exits) -> executor(sell)
-  logger records every handoff, kill, fill, partial and stop move.
+  logger records every handoff, kill, fill, wallet change and stop move.
 """
 from __future__ import annotations
 
 import logging
+import queue
 import signal
 import threading
 import time
+from contextlib import contextmanager
 
 from .agents.analyst import Analyst
 from .agents.executor import Executor
@@ -19,11 +24,13 @@ from .agents.logger import Logger
 from .agents.random_control import RandomControl
 from .agents.risk import Risk
 from .agents.scout import Scout
+from .agents.whale_scout import WhaleScout
 from .broker.paper import PaperBroker
 from .config import Config
-from .http import HttpClient
+from .http import DataError, HttpClient
 from .models import Candidate, Kill, RandomPick, Scorecard, Vetted
 from .sources.bundles import BundleChecker
+from .sources.chain import ChainReader
 from .sources.dexscreener import DexScreener
 from .sources.geckoterminal import GeckoTerminal
 from .sources.grok import Grok, Telegram
@@ -32,23 +39,33 @@ from .sources.solana_rpc import SolanaRPC
 
 log = logging.getLogger("memedesk")
 
+AGENTS = ["whale_scout", "scout", "filter", "analyst", "executor", "risk", "logger", "random"]
+
 
 class Desk:
     def __init__(self, cfg: Config, *, http=None, dex=None, gecko=None, rpc=None, rug=None,
-                 bundles=None, grok=None, logger=None, smart_wallets=None):
+                 bundles=None, grok=None, logger=None, smart_wallets=None, chain=None):
         self.cfg = cfg
-        self.http = http or HttpClient(timeout=cfg.http_timeout_s,
-                                       rpm={"api.mainnet-beta.solana.com": cfg.rpc_rpm})
+        self.http = http or HttpClient(timeout=cfg.http_timeout_s, rpm={
+            "api.mainnet-beta.solana.com": cfg.rpc_rpm, "mainnet.helius-rpc.com": 500, "api.helius.xyz": 100})
         self.logger = logger or Logger(cfg.data_dir)
-        dex = dex or DexScreener(self.http, cfg.dexscreener_url)
+        self.agents = {a: {"state": "ready", "last": "", "ts": None} for a in AGENTS}
+        if not cfg.whale_scout:
+            self.agents["whale_scout"]["state"] = "off"
+        if not cfg.random_control:
+            self.agents["random"]["state"] = "off"
+        self.logger.listeners.append(self._on_event)
+        self.dex = dex = dex or DexScreener(self.http, cfg.dexscreener_url)
         gecko = gecko or GeckoTerminal(self.http, cfg.geckoterminal_url)
-        rpc = rpc or SolanaRPC(self.http, cfg.solana_rpc_url)
+        self.chain = chain or ChainReader(self.http, cfg.solana_rpc_url, self.logger, cfg.helius_api_key)
+        rpc = rpc or SolanaRPC(self.http, self.chain.rpc_url)
         rug = rug or RugCheck(self.http, cfg.rugcheck_url)
         bundles = bundles or BundleChecker(self.http, cfg.trench_url)
         self.grok = grok or Grok(self.http, cfg.grok_url, cfg.xai_api_key, cfg.grok_model)
         self.logger.notifier = Telegram(self.http, cfg.telegram_bot_token, cfg.telegram_chat_id)
         self.broker = PaperBroker(self.logger, cfg.paper_start_usd, cfg.slippage_bps,
                                   cfg.paper_fee_bps, cfg.books)
+        self.whale = WhaleScout(cfg, gecko, dex, rug, self.chain, self.logger)
         self.scout = Scout(cfg, dex, gecko, self.logger)
         self.filter = Filter(cfg, rpc, rug, bundles, self.logger)
         self.analyst = Analyst(cfg, gecko, self.logger, self.grok, smart_wallets)
@@ -57,10 +74,48 @@ class Desk:
         self.risk = Risk(cfg, self.logger, dex)
         self.trade_lock = threading.RLock()
         self.stop_event = getattr(self.http, "stop_event", None) or threading.Event()
+        self.whale_queue: queue.Queue[Candidate] = queue.Queue()
         self.started = time.time()
+        self.heartbeat = 0.0
         self.last_cycle: dict = {}
+        self.recent_vetted: list[Vetted] = []
+        self.watch: dict[str, dict] = {}
         if self.random:
             self.logger.event("random", "seed", detail=f"rng seed {self.random.seed}")
+
+    # ---- agent status (dashboard) -----------------------------------------
+    def _on_event(self, agent, kind, symbol, reason, detail, data) -> None:
+        if kind == "handoff":
+            return
+        lg = self.agents["logger"]
+        lg["last"], lg["ts"] = f"logged {kind}" + (f" · {symbol}" if symbol else ""), time.time()
+        a = self.agents.get(agent)
+        if not a:
+            return
+        text = " ".join(x for x in (kind, symbol, reason) if x)
+        a["last"], a["ts"] = text[:90], time.time()
+        if kind == "error":
+            a["state"] = "error"
+        elif a["state"] == "error":
+            a["state"] = "ready"
+
+    @contextmanager
+    def working(self, agent: str):
+        a = self.agents[agent]
+        a["state"] = "working"
+        try:
+            yield
+        except Exception as e:
+            a["state"], a["last"], a["ts"] = "error", f"error: {e}"[:90], time.time()
+            raise
+        else:
+            if a["state"] == "working":
+                a["state"] = "ready"
+
+    @property
+    def mode(self) -> str:
+        tracked = len(self.logger.tracked_wallets()) if self.cfg.whale_mode else 0
+        return "whale mode" if tracked >= self.cfg.whale_signal_wallets else "pipeline"
 
     # ---- accounting -------------------------------------------------------
     def equity(self, book: str) -> tuple[float, float]:
@@ -74,23 +129,38 @@ class Desk:
         return self.logger.on_cooldown(mint, book) or any(
             p.mint == mint for p in self.logger.positions("open", book))
 
+    def _watch(self, c: Candidate) -> None:
+        self.watch[c.mint] = {"mint": c.mint, "symbol": c.symbol, "h1": c.price_change.get("h1"),
+                              "pair": c.pair_address, "ts": time.time()}
+        if len(self.watch) > 40:
+            for m in sorted(self.watch, key=lambda m: self.watch[m]["ts"])[:-40]:
+                del self.watch[m]
+
     # ---- pipeline ---------------------------------------------------------
     def vet(self, c: Candidate) -> Vetted | None:
         L = self.logger
-        L.event("scout", "scouted", c.mint, c.symbol, "in_window",
+        src = c.trail[-1]
+        L.event(src, "scouted", c.mint, c.symbol, c.reason or "in_window",
                 f"age {c.age_h:.1f}h mcap ${c.mcap:,.0f} liq ${c.liquidity_usd:,.0f}",
                 data={"pair": c.pair_address, "dex": c.dex_id, "sources": c.sources}, level=logging.DEBUG)
-        L.handoff("scout", "filter", c.mint, c.symbol)
-        v = self.filter.run(c)
+        L.handoff(src, "filter", c.mint, c.symbol)
+        self._watch(c)
+        with self.working("filter"):
+            v = self.filter.run(c)
         if isinstance(v, Kill):
             self._kill(v)
             return None
+        f = v.facts
+        L.event("filter", "pass", c.mint, c.symbol, "safe",
+                f"top10 {f.top10_pct:.0f}% · dev {f.dev_pct:.1f}% · LP {f.lp_locked_pct:.0f}% locked"
+                if None not in (f.top10_pct, f.dev_pct, f.lp_locked_pct) else "", level=logging.DEBUG)
         return v
 
     def score(self, v: Vetted) -> Scorecard | None:
         c = v.candidate
         self.logger.handoff("filter", "analyst", c.mint, c.symbol, data={"facts": v.facts.__dict__})
-        sc = self.analyst.run(v)
+        with self.working("analyst"):
+            sc = self.analyst.run(v)
         if isinstance(sc, Kill):
             self._kill(sc)
             return None
@@ -119,22 +189,42 @@ class Desk:
             except Exception as e:
                 self._kill(Kill("executor", c.mint, c.symbol, "fill_failed", str(e), cooldown_min=15, book=book))
                 return "executor"
-        tag = f"score {pos.score:.0f}" if pos.score is not None else f"random pick {pick.index + 1}/{pick.pool_size}"
-        msg = (f"ENTRY {pos.symbol} [{book}] {tag} ${pos.cost_usd:.2f} @ {pos.entry_price:.8g} "
+        if book == "random":
+            why = f"random pick {pick.index + 1}/{pick.pool_size}"
+        else:
+            why = (f"{c.reason} · score {pos.score:.0f}" if c.reason else f"score {pos.score:.0f}")
+        origin = "whale" if c.trail[0] == "whale_scout" else "pipeline"
+        msg = (f"ENTRY {pos.symbol} [{book}] {why} ${pos.cost_usd:.2f} @ {pos.entry_price:.8g} "
                f"stop {pos.stop_price:.8g} (-{self.cfg.stop_pct:g}%)")
         L.event("executor", "entry", pos.mint, pos.symbol, book, msg,
-                data={"position": pos.to_dict(),
-                      "components": getattr(pick, "components", None),
-                      "grok": getattr(pick, "grok_note", "")}, level=logging.WARNING)
+                data={"position": pos.to_dict(), "components": getattr(pick, "components", None),
+                      "grok": getattr(pick, "grok_note", ""), "origin": origin}, level=logging.WARNING)
+        L.event("executor", "decision", pos.mint, pos.symbol, "BUY", why,
+                data={"side": "BUY", "book": book, "reason": why, "usd": pos.cost_usd, "origin": origin})
         note = getattr(pick, "grok_note", "")
         L.notify(f"[paper] {msg}\nhttps://dexscreener.com/solana/{pos.pair_address}" + (f"\ngrok: {note}" if note else ""))
         return "entered"
 
+    def _random_arm(self, pool: list[Vetted], n: int, out: dict | None = None) -> None:
+        if not self.random or n <= 0:
+            return
+        pool = [v for v in pool if not self._blocked(v.candidate.mint, "random")]
+        with self.working("random"):
+            picks = self.random.pick(pool, n)
+        for pick in picks:
+            self.logger.event("random", "pick", pick.vetted.candidate.mint, pick.vetted.candidate.symbol,
+                              f"{pick.index + 1}/{pick.pool_size}", f"matched {n} analyst pass(es)")
+            res = self.enter(pick)
+            if out is not None:
+                out[f"random_{res}"] = out.get(f"random_{res}", 0) + 1
+
     def scan_cycle(self) -> dict:
         t0 = time.time()
-        cands, kills = self.scout.run(skip=lambda m: self.logger.on_cooldown(m))
+        with self.working("scout"):
+            cands, kills = self.scout.run(skip=lambda m: self.logger.on_cooldown(m))
         for k in kills:
             self._kill(k)
+        self.logger.event("scout", "scan", reason=f"{len(cands)} in window", detail=f"{len(kills)} out of window")
         out: dict[str, int] = {"scout_kills": len(kills), "in_window": len(cands)}
 
         def bump(k):
@@ -173,14 +263,8 @@ class Desk:
             passes += 1
             bump(f"scored_{self.enter(sc)}")
 
-        if self.random:
-            pool = [v for v in vetted if not self._blocked(v.candidate.mint, "random")]
-            for pick in self.random.pick(pool, passes):
-                self.logger.event("random", "pick", pick.vetted.candidate.mint, pick.vetted.candidate.symbol,
-                                  f"{pick.index + 1}/{pick.pool_size}", f"matched {passes} analyst pass(es)",
-                                  level=logging.DEBUG)
-                bump(f"random_{self.enter(pick)}")
-
+        self.recent_vetted = vetted
+        self._random_arm(vetted, passes, out)
         eq = {b: round(self.equity(b)[0], 2) for b in self.cfg.books}
         self.last_cycle = {"ts": time.time(), "secs": round(time.time() - t0, 1), "outcome": out, "equity": eq}
         self.logger.event("desk", "cycle", reason="scan",
@@ -188,14 +272,59 @@ class Desk:
                           data=self.last_cycle)
         return out
 
+    def process_whale(self, c: Candidate) -> str:
+        """A whale-mode candidate: straight to Filter, then Analyst 70+, then Risk."""
+        v = self.vet(c)
+        if not v:
+            return "filter"
+        if self._blocked(c.mint, "scored"):
+            return "blocked"
+        sc = self.score(v)
+        if not sc:
+            return "analyst"
+        res = self.enter(sc)
+        # keep the control matched: one random draw from the same kind of pool
+        self._random_arm(self.recent_vetted + [v], 1)
+        return res
+
     # ---- loops ------------------------------------------------------------
     def _monitor_loop(self) -> None:
         while not self.stop_event.is_set():
             try:
-                self.risk.monitor(self.executor, self.trade_lock)
+                with self.working("risk"):
+                    self.risk.monitor(self.executor, self.trade_lock)
             except Exception:
                 log.exception("monitor tick failed")
+            self.heartbeat = time.time()
             self.stop_event.wait(self.cfg.monitor_interval_s)
+
+    def whale_tick(self) -> None:
+        cfg = self.cfg
+        if cfg.whale_scout and time.time() - self.whale.last_run >= cfg.whale_interval_min * 60:
+            with self.working("whale_scout"):
+                self.whale.run_discovery()
+        if cfg.whale_mode and len(self.logger.tracked_wallets()) >= cfg.whale_signal_wallets:
+            with self.working("whale_scout"):
+                signals = self.whale.watch()
+            for s in signals:
+                c = self.whale.to_candidate(s)
+                if c is None:
+                    self.logger.event("whale_scout", "signal", s["mint"], "", "no_pair", s["reason"])
+                    continue
+                self.logger.event("whale_scout", "signal", c.mint, c.symbol, s["reason"],
+                                  f"{len(s['wallets'])} tracked wallets", data=s, level=logging.WARNING)
+                self.whale_queue.put(c)
+
+    def _whale_loop(self) -> None:
+        while not self.stop_event.is_set():
+            try:
+                self.whale_tick()
+            except DataError as e:
+                if "shutting down" not in str(e):
+                    log.warning("whale tick: %s", e)
+            except Exception:
+                log.exception("whale tick failed")
+            self.stop_event.wait(self.cfg.whale_auto("whale_watch_interval_s"))
 
     def report(self, since_ts: float) -> str:
         s = self.logger.summary(self.cfg.books, since_ts)
@@ -206,6 +335,8 @@ class Desk:
                          f"{st['open']} open")
         if s["scored_vs_random"]:
             lines.append(f"  scored vs random: {s['scored_vs_random']['verdict']}")
+        lines.append(f"  whale scout: {len(self.logger.tracked_wallets())} tracked wallets, "
+                     f"{len(self.logger.winners('scanned'))} winners scanned ({self.chain.backend})")
         top = list(s["kills_by_reason"].items())[:6]
         if top:
             lines.append("  top kills: " + ", ".join(f"{k} x{v}" for k, v in top))
@@ -223,22 +354,37 @@ class Desk:
         banner = (f"memedesk PAPER up | books {c.books} ${c.paper_start_usd:,.0f} each | "
                   f"{c.position_pct:g}%/trade | stop -{c.stop_pct:g}% | +{c.tp_trigger_pct:g}% sell "
                   f"{c.tp_sell_pct:g}% | runner trails {c.runner_trail_pct:g}% (floor entry) | "
-                  f"max {c.max_hold_h:g}h | min score {c.min_score:g}")
+                  f"max {c.max_hold_h:g}h | min score {c.min_score:g} | whale scout "
+                  f"{'on' if c.whale_scout else 'off'} via {self.chain.backend}")
         self.logger.event("desk", "start", detail=banner, level=logging.WARNING)
         self.logger.notify(banner)
-        mon = threading.Thread(target=self._monitor_loop, name="risk-monitor", daemon=True)
-        mon.start()
-        last_report = time.time()
+        threads = [threading.Thread(target=self._monitor_loop, name="risk-monitor", daemon=True)]
+        if c.whale_scout or c.whale_mode:
+            threads.append(threading.Thread(target=self._whale_loop, name="whale", daemon=True))
+        for t in threads:
+            t.start()
+        last_report, next_scan = time.time(), 0.0
         while not self.stop_event.is_set():
-            try:
-                self.scan_cycle()
-            except Exception:
-                log.exception("scan cycle failed")
+            self.heartbeat = time.time()
+            if time.time() >= next_scan:
+                try:
+                    self.scan_cycle()
+                except Exception:
+                    log.exception("scan cycle failed")
+                next_scan = time.time() + c.scan_interval_s
             if c.report_every_h > 0 and time.time() - last_report > c.report_every_h * 3600:
                 self.logger.notify(self.report(last_report))
                 last_report = time.time()
-            self.stop_event.wait(c.scan_interval_s)
-        mon.join(timeout=5)
+            try:  # whale signals jump the queue between scans
+                cand = self.whale_queue.get(timeout=2)
+            except queue.Empty:
+                continue
+            try:
+                self.process_whale(cand)
+            except Exception:
+                log.exception("whale candidate failed")
+        for t in threads:
+            t.join(timeout=5)
         final = self.report(self.started)
         self.logger.event("desk", "stop", detail=final.splitlines()[0], level=logging.WARNING)
         self.logger.notify(final)

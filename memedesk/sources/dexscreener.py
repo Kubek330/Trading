@@ -68,4 +68,7 @@ class DexScreener:
         best = self.best_pair_per_mint(self.pairs_for_mints(mints), mints)
         return {m: {"price": _f(p.get("priceUsd")),
                     "liq": _f((p.get("liquidity") or {}).get("usd")),
+                    "mcap": _f(p.get("marketCap")) or _f(p.get("fdv")),
+                    "h1": _f((p.get("priceChange") or {}).get("h1")),
+                    "symbol": (p.get("baseToken") or {}).get("symbol", ""),
                     "pair": p} for m, p in best.items()}

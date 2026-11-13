@@ -76,10 +76,25 @@ class Analyst:
 
     def __init__(self, cfg: Config, gecko, logger, grok=None, smart_wallets: set[str] | None = None):
         self.cfg, self.gecko, self.logger, self.grok = cfg, gecko, logger, grok
-        self.smart = smart_wallets if smart_wallets is not None else load_smart_wallets(cfg.smart_wallets_file)
+        self._fixed = smart_wallets
+        self._mtimes: tuple = ()
+        self._smart: set[str] = set()
         if not self.smart:
-            log.warning("no smart wallets loaded (%s); that component's weight is "
-                        "redistributed across the other five", cfg.smart_wallets_file)
+            log.warning("no smart wallets loaded yet (%s); that component's weight is "
+                        "redistributed across the other five until Whale Scout fills it", cfg.smart_wallets_file)
+
+    @property
+    def smart(self) -> set[str]:
+        """Tracked wallets: Whale Scout's file plus smart_wallets.manual.txt, reloaded on change."""
+        if self._fixed is not None:
+            return self._fixed
+        files = [Path(self.cfg.smart_wallets_file),
+                 Path(self.cfg.smart_wallets_file).with_name("smart_wallets.manual.txt")]
+        mt = tuple(f.stat().st_mtime if f.is_file() else 0 for f in files)
+        if mt != self._mtimes:
+            self._mtimes = mt
+            self._smart = set().union(*(load_smart_wallets(str(f)) for f in files))
+        return self._smart
 
     def holder_growth(self, v: Vetted) -> tuple[float | None, str]:
         hist = self.logger.holder_history(v.candidate.mint) if self.logger else []
@@ -118,9 +133,10 @@ class Analyst:
         growth, growth_note = self.holder_growth(v)
         notes.append(f"holder growth {growth_note}")
         smart_hits = None
-        if self.smart:
+        smart = self.smart
+        if smart:
             seen = buyers | set(v.facts.top_holder_owners)
-            smart_hits = len(self.smart & seen)
+            smart_hits = len(smart & seen)
 
         comps = {
             "momentum": score_momentum(c.price_change.get("m5", 0), c.price_change.get("h1", 0),
@@ -132,7 +148,7 @@ class Analyst:
             "smart_wallets": score_smart_wallets(smart_hits),
         }
         weights = dict(self.cfg.score_weights)
-        if not self.smart:
+        if not smart:
             weights.pop("smart_wallets")
         total_w = sum(weights.values())
         score = sum(comps[k] * w for k, w in weights.items()) / total_w

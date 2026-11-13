@@ -32,6 +32,19 @@ CREATE TABLE IF NOT EXISTS positions (
 CREATE TABLE IF NOT EXISTS account (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS holders (mint TEXT, ts REAL, holders INTEGER);
 CREATE INDEX IF NOT EXISTS ix_holders ON holders(mint, ts);
+CREATE TABLE IF NOT EXISTS parsed_sigs (sig TEXT PRIMARY KEY);
+CREATE TABLE IF NOT EXISTS swaps (
+  sig TEXT, slot INTEGER, ts REAL, wallet TEXT, mint TEXT, d_token REAL, d_sol REAL,
+  PRIMARY KEY (sig, wallet, mint));
+CREATE INDEX IF NOT EXISTS ix_swaps_wallet ON swaps(wallet, ts);
+CREATE INDEX IF NOT EXISTS ix_swaps_mint ON swaps(mint, ts);
+CREATE TABLE IF NOT EXISTS winners (
+  mint TEXT PRIMARY KEY, symbol TEXT, pool TEXT, multiple REAL, found_ts REAL,
+  scan_status TEXT, scanned_ts REAL, early_wallets TEXT);
+CREATE TABLE IF NOT EXISTS wallet_flags (wallet TEXT, mint TEXT, flag TEXT, PRIMARY KEY (wallet, mint, flag));
+CREATE TABLE IF NOT EXISTS wallets (
+  address TEXT PRIMARY KEY, status TEXT, score REAL, winners TEXT, pnl_sol REAL,
+  last_seen REAL, added_ts REAL, updated_ts REAL, reason TEXT);
 """
 
 
@@ -55,6 +68,7 @@ class Logger:
         self.lock = threading.RLock()
         self.jsonl = open(self.dir / "desk_paper.jsonl", "a", buffering=1)
         self.notifier = None
+        self.listeners: list = []   # callables(agent, kind, symbol, reason, detail, data)
 
     # ---- generic event stream --------------------------------------------
     def event(self, agent: str, kind: str, mint: str = "", symbol: str = "",
@@ -70,6 +84,11 @@ class Logger:
                                     "symbol": symbol, "reason": reason, "detail": detail,
                                     "data": data or {}}) + "\n")
         log.log(level, "[%-8s] %-9s %-10s %s %s", agent, kind, symbol[:10], reason, detail)
+        for fn in self.listeners:
+            try:
+                fn(agent, kind, symbol, reason, detail, data or {})
+            except Exception:  # a dashboard hook must never break logging
+                log.debug("listener failed", exc_info=True)
 
     def handoff(self, src: str, dst: str, mint: str, symbol: str, detail: str = "",
                 data: dict | None = None) -> None:
@@ -110,6 +129,101 @@ class Logger:
         with self.lock:
             return self.db.execute("SELECT ts, holders FROM holders WHERE mint=? AND ts>=? ORDER BY ts",
                                    (mint, time.time() - since_s)).fetchall()
+
+    # ---- chain swap cache (whale scout) -----------------------------------
+    def cached_swaps(self, sigs: list[str]):
+        from ..sources.chain import Swap
+        if not sigs:
+            return [], []
+        with self.lock:
+            done = set()
+            rows = []
+            for i in range(0, len(sigs), 500):
+                chunk = sigs[i:i + 500]
+                q = ",".join("?" * len(chunk))
+                done |= {r[0] for r in self.db.execute(f"SELECT sig FROM parsed_sigs WHERE sig IN ({q})", chunk)}
+                rows += self.db.execute(
+                    f"SELECT sig,slot,ts,wallet,mint,d_token,d_sol FROM swaps WHERE sig IN ({q})", chunk).fetchall()
+        return [Swap(*r) for r in rows], [x for x in sigs if x not in done]
+
+    def mark_parsed(self, sigs: list[str]) -> None:
+        with self.lock:
+            self.db.executemany("INSERT OR IGNORE INTO parsed_sigs(sig) VALUES(?)", [(x,) for x in sigs if x])
+            self.db.commit()
+
+    def save_swaps(self, swaps) -> None:
+        if not swaps:
+            return
+        with self.lock:
+            self.db.executemany(
+                "INSERT OR REPLACE INTO swaps(sig,slot,ts,wallet,mint,d_token,d_sol) VALUES(?,?,?,?,?,?,?)",
+                [(x.sig, x.slot, x.ts, x.wallet, x.mint, x.d_token, x.d_sol) for x in swaps])
+            self.db.commit()
+
+    def wallet_swaps(self, wallet: str, since_ts: float = 0.0):
+        from ..sources.chain import Swap
+        with self.lock:
+            rows = self.db.execute("SELECT sig,slot,ts,wallet,mint,d_token,d_sol FROM swaps "
+                                   "WHERE wallet=? AND ts>=? ORDER BY ts", (wallet, since_ts)).fetchall()
+        return [Swap(*r) for r in rows]
+
+    def last_activity(self, wallet: str) -> float | None:
+        with self.lock:
+            row = self.db.execute("SELECT MAX(ts) FROM swaps WHERE wallet=?", (wallet,)).fetchone()
+        return row[0] if row and row[0] else None
+
+    # ---- wallets & winners ------------------------------------------------
+    def tracked_wallets(self) -> list[dict]:
+        with self.lock:
+            rows = self.db.execute("SELECT address,score,winners,pnl_sol,last_seen,added_ts,reason FROM wallets "
+                                   "WHERE status='tracked' ORDER BY score DESC").fetchall()
+        return [{"address": a, "score": sc, "winners": json.loads(w or "[]"), "pnl_sol": p,
+                 "last_seen": ls, "added_ts": ad, "reason": r} for a, sc, w, p, ls, ad, r in rows]
+
+    def upsert_wallet(self, address: str, status: str, score: float, winners: list, pnl_sol,
+                      last_seen, reason: str) -> None:
+        now = time.time()
+        with self.lock:
+            row = self.db.execute("SELECT added_ts, status FROM wallets WHERE address=?", (address,)).fetchone()
+            added = row[0] if row and row[1] == "tracked" and status == "tracked" else (now if status == "tracked" else None)
+            self.db.execute(
+                "INSERT OR REPLACE INTO wallets(address,status,score,winners,pnl_sol,last_seen,added_ts,updated_ts,reason) "
+                "VALUES(?,?,?,?,?,?,?,?,?)",
+                (address, status, score, _json(winners), pnl_sol, last_seen, added, now, reason))
+            self.db.commit()
+
+    def flag_wallet(self, wallet: str, mint: str, flag: str) -> None:
+        with self.lock:
+            self.db.execute("INSERT OR IGNORE INTO wallet_flags(wallet,mint,flag) VALUES(?,?,?)", (wallet, mint, flag))
+            self.db.commit()
+
+    def wallet_flags(self) -> dict[str, set[str]]:
+        with self.lock:
+            rows = self.db.execute("SELECT wallet, flag FROM wallet_flags").fetchall()
+        out: dict[str, set[str]] = {}
+        for w, f in rows:
+            out.setdefault(w, set()).add(f)
+        return out
+
+    def save_winner(self, mint, symbol, pool, multiple, scan_status="pending", early=None) -> None:
+        with self.lock:
+            old = self.db.execute("SELECT found_ts FROM winners WHERE mint=?", (mint,)).fetchone()
+            self.db.execute(
+                "INSERT OR REPLACE INTO winners(mint,symbol,pool,multiple,found_ts,scan_status,scanned_ts,early_wallets) "
+                "VALUES(?,?,?,?,?,?,?,?)",
+                (mint, symbol, pool, multiple, old[0] if old else time.time(), scan_status,
+                 time.time() if scan_status != "pending" else None, _json(early or [])))
+            self.db.commit()
+
+    def winners(self, status: str | None = None) -> list[dict]:
+        q = "SELECT mint,symbol,pool,multiple,found_ts,scan_status,early_wallets FROM winners"
+        args: tuple = ()
+        if status:
+            q, args = q + " WHERE scan_status=?", (status,)
+        with self.lock:
+            rows = self.db.execute(q + " ORDER BY found_ts", args).fetchall()
+        return [{"mint": m, "symbol": sy, "pool": p, "multiple": mu, "found_ts": f, "scan_status": st,
+                 "early": json.loads(e or "[]")} for m, sy, p, mu, f, st, e in rows]
 
     # ---- positions & account ---------------------------------------------
     def save_position(self, p: Position) -> None:

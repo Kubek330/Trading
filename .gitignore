@@ -4,5 +4,6 @@ __pycache__/
 .env
 data/
 smart_wallets.txt
+smart_wallets.tmp
 *.json.key
 id.json

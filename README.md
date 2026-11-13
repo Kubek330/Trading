@@ -2,9 +2,23 @@
 
 A paper-trading Solana memecoin desk that runs overnight on an Android phone (Termux) or any machine with Python 3.10+. It hunts fresh coins using live on-chain and DEX data, kills anything unsafe, and scores what's left. A **Random control** book trades the same filtered coins without scoring, so you can see whether the score beats luck. You can watch everything at **http://127.0.0.1:8084**.
 
+The dashboard is dark, terminal-style and built for a 390px phone screen. It has:
+- a ticker of the tokens the desk is watching, with 1h % change
+- the book balance, with amount put in, trade count, multiplier, PnL, wins/losses, and an equity chart with a dashed "put in" line
+- agent chips that show live status
+- a **Pipeline** tab: one card per agent, showing status and last action, plus the tracked wallets
+- positions with MC and entry → now prices
+- a decision stream (BUY/SELL with the reason)
+- a **Random** tab showing the control book and the comparison
+
+Every number on it comes from the desk's own records.
+
 It is paper only: there is no live trading code in this version. It needs no third-party packages, only the standard library.
 
 ```
+ whale scout (every 30 min) ─ 5x winners → earliest buyers on-chain → top 50 wallets → smart_wallets.txt
+      └─ whale mode: 2+ tracked wallets buy the same token within 10 min ──────┐
+                                                                               ▼
                        ┌─► analyst (score ≥70) ─► executor ─► risk (stop set) ─► executor  [scored book]
  scout ─► filter ──────┤
  (window)  (kills)     └─► random (same count)  ─► executor ─► risk (stop set) ─► executor  [random book]
@@ -19,6 +33,7 @@ It is paper only: there is no live trading code in this version. It needs no thi
 
 | Agent | Does |
 |---|---|
+| **whale scout** | Every 30 min it finds Solana tokens that ran **5x+ in the last 7 days**, using GeckoTerminal 4h candles: peak high divided by the lowest low before the peak. For each winner it reads the **first ~200 swaps from chain**. For pump.fun mints it reads the bonding curve (address derived on-device); otherwise it reads the pool. It uses Helius if `HELIUS_API_KEY` is set, otherwise the public RPC with a small per-run budget, and caches every parsed swap. Wallets are scored on how many different winners they bought early, plus the realized SOL PnL from every swap of theirs the desk has seen. It skips bots and MEV (more than 50 trades in an hour, or a buy and sell in one slot), RugCheck creators and insider-flagged wallets, and wallets inactive for 7 days. It keeps the **top 50** in `smart_wallets.txt` and logs every add and drop with its reason. **Whale mode:** it polls the tracked wallets, and when **2+ of them buy the same token within 10 min**, the token goes straight to Filter. It must still pass Filter, Analyst 70+ and Risk. |
 | **scout** | Finds Solana pairs **30m–72h old** with **mcap $300k–$20M**. Pair data comes from DexScreener; discovery also uses DexScreener profiles/boosts and GeckoTerminal's trending and new pools. |
 | **filter** | Kills a coin if: **mint or freeze authority isn't revoked** (read on-chain via RPC) · **LP isn't burned or locked** (≥95%) · **top-10 holders own more than 25%** (pool and AMM vaults excluded) · liquidity is **under 5% of mcap** · **dev holds more than 3%** or has **past rugs** · launch was **more than 10% bundled** · coin is **already up more than 80% in 1h** · coin is marked rugged. If any of this data can't be fetched, the coin is killed. |
 | **analyst** | Scores 0–100 from momentum (20), unique buyers (20), buy/sell ratio (15), holder growth (15), liq/mcap (15) and smart wallets (15). **Only scores of 70 or more pass.** If a data point is missing, that part scores 0. |
@@ -77,7 +92,9 @@ sqlite3 data/desk_paper.db "select agent, book, reason, count(*) from kills grou
 - **Holder growth needs 10+ minutes of observation.** On first sighting that part scores 0. Analyst kills are retried after 10 min, so a strong coin usually passes on its second look.
 - **Stops are polled every 15s.** A coin that gaps down can exit well below −15%, and paper mode books the exit at the price it actually saw.
 - **The rug guard (liquidity halving) is an addition to your exit rules.** It applies to both books equally, so the comparison stays fair. To turn it off, set `DESK_LIQ_CRASH_EXIT_PCT=100`.
-- **Smart wallets only count once you list them in `smart_wallets.txt`** (start from `smart_wallets.example.txt`). Until then, that 15 points of weight is spread over the other five parts.
+- **Smart wallets** come from Whale Scout's `smart_wallets.txt` plus your own `smart_wallets.manual.txt`. The Analyst reloads them when they change. Until the list has wallets, its 15 points of weight are spread over the other five parts.
+- **Whale Scout on the public RPC is slow, on purpose.** Each 30-min run reads about 3 winners × 80 early swaps, and walks back at most 6,000 signatures per winner. A winner with a deeper history is logged as `too_deep` and skipped, not guessed. Over a night the wallet book fills up gradually. A free Helius key raises this to about 20 winners × 200 swaps per run, with 60s wallet polling.
+- **Realized PnL** is calculated only from swaps the desk has actually read: early buys, plus later trades seen while polling. Until a wallet has a sell on record, its PnL shows as `?` and its score is capped at 80.
 - The dashboard binds to 127.0.0.1 only. Don't expose it to your network.
 - This is a research tool, not financial advice. Most fresh memecoins go to zero.
 
@@ -87,4 +104,4 @@ sqlite3 data/desk_paper.db "select agent, book, reason, count(*) from kills grou
 pip install pytest && python -m pytest -q
 ```
 
-There are 39 offline tests. They cover every filter kill rule (including top-10 holders with the pool vault excluded), the 8% cap, the −15% stop, the +35% partial sell, the runner trailing stop and its floor at entry, the 48h max hold, the Random arm's matched draws from filter survivors, handoff enforcement, the comparison verdicts, the dashboard server, HTTP backoff and caching, and a check that only the standard library is imported.
+There are 47 offline tests. They cover every filter kill rule (including top-10 holders with the pool vault excluded), the 8% cap, the −15% stop, the +35% partial sell, the runner trailing stop and its floor at entry, the 48h max hold, the Random arm's matched draws from filter survivors, handoff enforcement, the comparison verdicts, the dashboard server, HTTP backoff and caching, a check that only the standard library is imported, and Whale Scout: winner detection, wallet scoring/exclusions/add-drop reasons, whale-mode signals going through Filter/Analyst/Risk, both transaction parsers, signature paging, and pump.fun bonding-curve derivation.

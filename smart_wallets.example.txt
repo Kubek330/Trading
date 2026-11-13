@@ -1,4 +1,3 @@
-# One Solana wallet address per line. Copy to smart_wallets.txt.
-# The analyst counts how many of these are buying (last 60 min) or sit in the
-# top holders. Curate from wallets with a verified track record on fresh coins.
-# If the file is missing, the smart-wallet weight is spread over the other components.
+# Whale Scout now writes smart_wallets.txt itself (top 50 wallets, with score and last seen).
+# To add wallets of your own, put them in smart_wallets.manual.txt, one address per line.
+# The Analyst reads both files and reloads them when they change.

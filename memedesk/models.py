@@ -51,6 +51,7 @@ class Candidate:
     volume: dict[str, float]
     sources: list[str] = field(default_factory=list)
     trail: list[str] = field(default_factory=lambda: ["scout"])
+    reason: str = ""                 # why it was picked up (whale signal text)
     seen_ts: float = field(default_factory=time.time)
 
     @property

@@ -20,6 +20,9 @@ from ..models import Kill, OrderTicket, Position, RiskApproval, require_stage
 
 log = logging.getLogger("memedesk.risk")
 
+EXIT_LABELS = {"stop_loss": "stop loss", "take_profit": "take profit 75%", "runner_trail": "trail exit",
+               "runner_breakeven": "breakeven exit", "max_hold": "48h max hold", "liq_crash": "liquidity crash",
+               "pool_vanished": "pool vanished"}
 PRICE_MISS_LIMIT = 20  # consecutive ticks with no price => pool treated as gone
 
 
@@ -62,6 +65,7 @@ class Risk:
 
     def __init__(self, cfg: Config, logger, dex):
         self.cfg, self.logger, self.dex = cfg, logger, dex
+        self.quotes: dict[str, dict] = {}   # mint -> latest {price, mcap, h1, ts} for the dashboard
 
     # ---- pre-trade --------------------------------------------------------
     def halted(self, book: str, equity_usd: float) -> str | None:
@@ -104,6 +108,9 @@ class Risk:
             log.warning("monitor price fetch failed: %s", e)
             return
         now = time.time()
+        for m, q in quotes.items():
+            self.quotes[m] = {"price": q["price"], "mcap": q.get("mcap"), "h1": q.get("h1"),
+                              "symbol": q.get("symbol", ""), "ts": now}
         for p in open_pos:
             q = quotes.get(p.mint)
             if not q or q["price"] <= 0:
@@ -124,6 +131,8 @@ class Risk:
 
     def _act(self, executor, lock, p: Position, action, price: float, now: float) -> None:
         kind, frac, reason = action
+        cost_part = p.cost_usd * (p.qty / p.initial_qty if p.initial_qty else 1) * (frac if frac < 1 else 1)
+        before = p.realized_usd
         with lock:
             try:
                 p = executor.sell(p, frac, price, reason)
@@ -135,6 +144,12 @@ class Risk:
                 p.tp_taken = True
                 p.stop_price = runner_stop(p, self.cfg)
                 self.logger.save_position(p)
+        leg_pnl = (p.realized_usd - before) - cost_part
+        label = (f"take profit {self.cfg.tp_sell_pct:g}%" if reason == "take_profit"
+                 else EXIT_LABELS.get(reason, reason))
+        self.logger.event(self.name, "decision", p.mint, p.symbol, "SELL", f"{label} {leg_pnl:+.2f}$",
+                          data={"side": "SELL", "book": p.book, "reason": f"{label} {'+' if leg_pnl >= 0 else '−'}${abs(leg_pnl):.2f}",
+                                "usd": round(p.realized_usd - before, 2), "pnl_usd": round(leg_pnl, 2)})
         if kind == "partial":
             msg = (f"TP {p.symbol} [{p.book}] sold {frac * 100:.0f}% at "
                    f"+{(price / p.entry_price - 1) * 100:.0f}%, runner stop {p.stop_price:.8g}")

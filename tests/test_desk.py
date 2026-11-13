@@ -59,7 +59,9 @@ class FakeDex:
 
     def prices(self, mints):
         return {m: {"price": float(self.pairs[m]["priceUsd"]),
-                    "liq": self.pairs[m]["liquidity"]["usd"], "pair": self.pairs[m]}
+                    "liq": self.pairs[m]["liquidity"]["usd"], "mcap": self.pairs[m]["marketCap"],
+                    "h1": self.pairs[m]["priceChange"]["h1"], "symbol": self.pairs[m]["baseToken"]["symbol"],
+                    "pair": self.pairs[m]}
                 for m in mints if m in self.pairs}
 
     def set_price(self, mint, price, liq=None):
@@ -354,13 +356,17 @@ def test_dashboard_state_and_server(tmp_path):
     d, _ = make_desk(tmp_path, dashboard_port=0)
     d.scan_cycle()
     s = build_state(d)
-    assert len(s["open"]) == 2 and s["summary"]["books"]["scored"]["open"] == 1
+    assert len(s["books"]["scored"]["positions"]) == 1 and len(s["books"]["random"]["positions"]) == 1
+    assert s["books"]["scored"]["entries"] == 1 and s["books"]["scored"]["start_usd"] == 1000
+    assert [x["side"] for x in s["decisions"]] == ["BUY", "BUY"]
+    assert s["mode"] == "pipeline" and s["agents"]["filter"]["last"]
+    assert any(t["symbol"] == "GOOD" for t in s["ticker"])
     srv = start_dashboard(d)
     port = srv.server_address[1]
     body = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{port}/api/state").read())
-    assert body["books"] == ["scored", "random"]
+    assert set(body["books"]) == {"scored", "random"}
     page = urllib.request.urlopen(f"http://127.0.0.1:{port}/").read().decode()
-    assert "memedesk" in page and "esc(" in page
+    assert "MemeDesk" in page and "esc(" in page
     srv.shutdown()
 
 

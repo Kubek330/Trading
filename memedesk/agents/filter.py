@@ -130,7 +130,7 @@ class Filter:
         return None
 
     def run(self, c: Candidate) -> Vetted | Kill:
-        require_stage(c, "scout", self.name)
+        require_stage(c, ("scout", "whale_scout"), self.name)
         h1 = c.price_change.get("h1", 0.0)
         if h1 > self.cfg.max_h1_change_pct or c.liq_mcap_pct < self.cfg.min_liq_mcap_pct:
             # market-data kills need no on-chain calls

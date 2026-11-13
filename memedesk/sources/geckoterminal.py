@@ -41,6 +41,35 @@ class GeckoTerminal:
                 continue
         return list(dict.fromkeys(out))
 
+    def discover_pools(self) -> list[dict]:
+        """Pools with real 24h/6h action: [{'pool','mint','symbol'}] (deduped by mint)."""
+        out: dict[str, dict] = {}
+        for path, params in (("/networks/solana/trending_pools", {"duration": "24h"}),
+                             ("/networks/solana/trending_pools", {"duration": "6h"}),
+                             ("/networks/solana/pools", {"sort": "h24_volume_usd_desc"}),
+                             ("/networks/solana/pools", {"sort": "h24_tx_count_desc"})):
+            try:
+                data = self.http.get(f"{self.base}{path}", params=params, headers=HEADERS, cache_ttl=600)
+            except DataError:
+                continue
+            for pool in data.get("data", []):
+                a = pool.get("attributes") or {}
+                tid = (((pool.get("relationships") or {}).get("base_token") or {}).get("data") or {}).get("id", "")
+                if not tid.startswith("solana_") or not a.get("address"):
+                    continue
+                mint = tid[len("solana_"):]
+                out.setdefault(mint, {"pool": a["address"], "mint": mint,
+                                      "symbol": (a.get("name") or "?").split(" /")[0].strip()})
+        return list(out.values())
+
+    def ohlcv(self, pool: str, timeframe: str = "hour", aggregate: int = 4, limit: int = 42) -> list[list[float]]:
+        """[[ts, open, high, low, close, volume], ...] oldest first."""
+        data = self.http.get(f"{self.base}/networks/solana/pools/{pool}/ohlcv/{timeframe}",
+                             params={"aggregate": aggregate, "limit": limit, "currency": "usd"},
+                             headers=HEADERS, cache_ttl=1800)
+        rows = ((data.get("data") or {}).get("attributes") or {}).get("ohlcv_list") or []
+        return sorted(([float(x) for x in r[:6]] for r in rows if len(r) >= 6), key=lambda r: r[0])
+
     def trades(self, pool: str, window_min: float = 60.0) -> list[dict]:
         """Last <=300 swaps on the pool inside the window:
         [{'ts','kind':'buy'|'sell','wallet','usd'}]."""

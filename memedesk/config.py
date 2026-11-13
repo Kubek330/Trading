@@ -8,6 +8,9 @@ directory). Defaults implement the desk spec:
            top-10 holders > 25%, liquidity < 5% of mcap, dev > 3% or past rugs,
            bundled launch > 10%, already +80% in 1h
   analyst  score 0-100, only >= 70 passes
+  whale    every 30 min: find 5x+ winners (7d), read their earliest buyers on-chain,
+           keep the top 50 wallets; whale mode sends 2+ tracked wallets buying the same
+           token within 10 min straight to the filter
   random   control arm: skips the analyst, picks filter survivors at random
   executor max 8% of the book's equity per trade
   risk     stop -15% set before entry; at +35% sell 75%; the rest trails 35%
@@ -77,6 +80,25 @@ class Config:
     random_control: bool = True              # run the luck baseline alongside
     random_seed: int = 0                     # 0 = time-based
 
+    # ---- whale scout ------------------------------------------------------
+    whale_scout: bool = True
+    whale_interval_min: float = 30.0
+    whale_min_multiple: float = 5.0          # 5x+ ...
+    whale_lookback_d: float = 7.0            # ... within the last 7 days
+    whale_pools_per_run: int = 30            # OHLCV checks per run (GeckoTerminal is ~25/min)
+    whale_tokens_per_run: int = 0            # winners whose early buyers are read per run (0 = auto)
+    whale_early_swaps: int = 0               # earliest swaps read per winner (0 = auto: 200 Helius / 80 public)
+    whale_max_sig_pages: int = 0             # x1000 signatures walked back per winner (0 = auto)
+    whale_top_n: int = 50
+    whale_min_winners: int = 2               # must have bought >= 2 different winners early
+    whale_inactive_days: float = 7.0
+    whale_bot_trades_per_h: float = 50.0
+    whale_mode: bool = True
+    whale_signal_wallets: int = 2
+    whale_signal_window_min: float = 10.0
+    whale_watch_interval_s: float = 0.0      # poll tracked wallets (0 = auto: 60s Helius / 180s public)
+    helius_api_key: str = ""
+
     # ---- executor ---------------------------------------------------------
     position_pct: float = 8.0                # of the book's equity; clamped to 8
     max_pool_impact_pct: float = 1.0         # size <= this % of pool liquidity
@@ -132,7 +154,8 @@ class Config:
         cfg = cls()
         for f in fields(cls):
             raw = os.environ.get(f"DESK_{f.name.upper()}")
-            if raw is None and f.name in {"xai_api_key", "telegram_bot_token", "telegram_chat_id"}:
+            if raw is None and f.name in {"xai_api_key", "telegram_bot_token", "telegram_chat_id",
+                                          "helius_api_key"}:
                 raw = os.environ.get(f.name.upper())
             if raw is None or raw == "":
                 continue
@@ -160,6 +183,15 @@ class Config:
             raise ValueError("tp_sell_pct must be in (0, 100], tp_trigger_pct > 0")
         if self.min_age_min / 60 >= self.max_age_h or self.min_mcap >= self.max_mcap:
             raise ValueError("scout window is empty")
+
+    def whale_auto(self, name: str) -> float:
+        """Budgets that depend on whether a Helius key is available."""
+        helius = bool(self.helius_api_key)
+        val = getattr(self, name)
+        if val:
+            return val
+        return {"whale_tokens_per_run": (20, 3), "whale_early_swaps": (200, 80),
+                "whale_max_sig_pages": (40, 6), "whale_watch_interval_s": (60, 180)}[name][0 if helius else 1]
 
     @property
     def books(self) -> list[str]:
