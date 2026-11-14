@@ -54,7 +54,7 @@ It is paper only: there is no live trading code in this version. It needs no thi
 - The minimum score is 55.
 - It scans every 60 s, and rejected coins are re-checked after 3 minutes.
 - The safety filters are the same as in active, except that the liquidity/mcap floor is 3%.
-- The sniper entry gate is looser: mcap ≥ $15k, ≥ 15 trades in 5 min, buy/sell ≥ 1.2, skips coins up more than 100% in 5 min.
+- The sniper entry gate is looser: mcap ≥ $7k, ≥ 15 trades in 5 min, buy/sell ≥ 1.2, skips coins up more than 100% in 5 min.
 
 `DESK_PROFILE=strict` is the original spec: every unknown kills, and the minimum score is 70. Any `DESK_*` value you set yourself overrides the profile.
 
@@ -80,6 +80,8 @@ The sniper hunts **brand-new coins, 3–30 minutes old**: the ones the main desk
 - **Tracking:** every young coin Scout sees is re-checked each scan until it turns 30 min old.
 - **Entry gate:** mcap $30k–$3M, liquidity ≥ $10k, ≥ 20 trades in the last 5 min, buyers ≥ 1.3× sellers. It skips a coin that is falling, and one that is already up more than 60% in 5 min.
 - **Safety:** the same on-chain checks as the main filter, with thresholds for new coins: top-10 ≤ 30%, dev ≤ 5%, bundle ≤ 15%. There is no 1-hour pump rule, since these coins are only minutes old.
+- **Discovery:** besides DexScreener, Scout reads GeckoTerminal's 5-minute trending pools, the first two pages of new pools, and the most active pump.fun pools. Most launches never pay for a DexScreener profile, so the profile feed alone misses them.
+- **Paper realism:** size is capped at 5% of the estimated curve reserves, and fills use 4% slippage each way instead of 2%.
 - **Exits:** 4% per trade, stop −20%, at +50% sell 75%, the runner trails 30% below its peak (never below entry), max hold 6 h.
 - **Turning it off:** set `DESK_SNIPER=false`. Every threshold is a `DESK_SNIPER_*` setting.
 
@@ -153,4 +155,4 @@ sqlite3 data/desk_paper.db "select agent, book, reason, count(*) from kills grou
 pip install pytest && python -m pytest -q
 ```
 
-There are 63 offline tests. They cover every filter kill rule (including top-10 holders with the pool vault excluded), the 8% cap, the −15% stop, the +35% partial sell, the runner trailing stop and its floor at entry, the 48h max hold, the Random arm's matched draws from filter survivors, handoff enforcement, the comparison verdicts, the dashboard server, HTTP backoff and caching, a check that only the standard library is imported, and Whale Scout: winner detection, wallet scoring/exclusions/add-drop reasons, whale-mode signals going through Filter/Analyst/Risk, both transaction parsers, signature paging, and pump.fun bonding-curve derivation.
+There are 64 offline tests. They cover every filter kill rule (including top-10 holders with the pool vault excluded), the 8% cap, the −15% stop, the +35% partial sell, the runner trailing stop and its floor at entry, the 48h max hold, the Random arm's matched draws from filter survivors, handoff enforcement, the comparison verdicts, the dashboard server, HTTP backoff and caching, a check that only the standard library is imported, and Whale Scout: winner detection, wallet scoring/exclusions/add-drop reasons, whale-mode signals going through Filter/Analyst/Risk, both transaction parsers, signature paging, and pump.fun bonding-curve derivation.

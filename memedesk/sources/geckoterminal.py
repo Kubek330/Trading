@@ -81,9 +81,14 @@ class GeckoTerminal:
 
     def discover_mints(self) -> list[str]:
         out: list[str] = []
-        for path, params in (("/networks/solana/trending_pools", {"duration": "1h"}),
+        for path, params in (("/networks/solana/trending_pools", {"duration": "5m"}),
+                             ("/networks/solana/trending_pools", {"duration": "1h"}),
                              ("/networks/solana/trending_pools", {"duration": "6h"}),
-                             ("/networks/solana/new_pools", {"page": 1})):
+                             ("/networks/solana/new_pools", {"page": 1}),
+                             ("/networks/solana/new_pools", {"page": 2}),
+                             # most active pump.fun coins (mostly still on the bonding curve): what the sniper hunts.
+                             # Most of them never pay for a DexScreener profile, so the profile feed misses them.
+                             ("/networks/solana/dexes/pump-fun/pools", {"sort": "h24_tx_count_desc"})):
             try:
                 out.extend(self._pool_mints(path, params))
             except DataError:

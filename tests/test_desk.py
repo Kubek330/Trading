@@ -668,3 +668,15 @@ def test_dump_exit_cuts_loser_before_hard_stop(tmp_path):
     from memedesk.agents.risk import dump_check
     c.entry_price, c.status = 0.0005, "open"
     assert dump_check(c, 0.0009, pr, d.cfg) is None
+
+
+def test_sniper_low_mcap_curve_coin_sized_to_reserves_with_higher_slippage(tmp_path):
+    yp = young_pair()
+    yp["dexId"], yp["liquidity"]["usd"], yp["marketCap"] = "pumpfun", 0, 7_500     # early curve coin
+    rep = report(markets=[], topHolders=[{"address": f"h{i}", "owner": f"o{i}", "pct": 1.0} for i in range(12)])
+    d, _ = make_desk(tmp_path, pairs=[yp], rep=rep, sniper_min_mcap=7_000, sniper_min_liq=5_000)
+    out = d.scan_cycle()
+    assert out.get("sniper_entered") == 1, kills(d)
+    [p] = d.logger.positions("open", "sniper")
+    assert p.cost_usd == pytest.approx(7_500 * 0.10 * 0.05)            # 5% of the ~10%-of-mcap reserve estimate
+    assert p.entry_price == pytest.approx(0.001 * 1.04 / (1 - 0.005))   # 4% sniper slippage + fee

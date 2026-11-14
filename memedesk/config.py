@@ -35,8 +35,9 @@ PROFILES = {
     # score >= 55, scans every 60s, rejected coins re-checked after 3 min. Safety filters unchanged.
     "fast": {"min_score": 55.0, "scan_interval_s": 60.0, "score_kill_cooldown_min": 3.0,
              "holder_growth_optional": True, "min_liq_mcap_pct": 3.0,
-             "sniper_min_mcap": 15_000.0, "sniper_min_liq": 5_000.0, "sniper_min_txns_m5": 15,
-             "sniper_min_buy_sell_m5": 1.2, "sniper_max_m5_pct": 100.0, "monitor_interval_s": 5.0},
+             "sniper_min_liq": 5_000.0, "sniper_min_txns_m5": 15,
+             "sniper_min_buy_sell_m5": 1.2, "sniper_max_m5_pct": 100.0, "monitor_interval_s": 5.0,
+             "sniper_min_mcap": 7_000.0},
 }
 
 # Hard ceiling that config cannot raise. Executor and risk enforce it independently.
@@ -138,6 +139,8 @@ class Config:
     sniper_max_bundle_pct: float = 15.0
     sniper_min_organic_score: float = 0.0    # brand-new tokens rarely have a Jupiter score yet
     sniper_position_pct: float = 4.0         # smaller: sniping is riskier (hard cap 8% still applies)
+    sniper_max_pool_impact_pct: float = 5.0  # size <= this % of (estimated) curve reserves
+    sniper_slippage_bps: int = 400           # paper slippage each way: thin curves move more than pools
     sniper_stop_pct: float = 20.0
     sniper_tp_trigger_pct: float = 50.0
     sniper_tp_sell_pct: float = 75.0
@@ -264,7 +267,8 @@ class Config:
         return replace(self, stop_pct=self.sniper_stop_pct, tp_trigger_pct=self.sniper_tp_trigger_pct,
                        tp_sell_pct=self.sniper_tp_sell_pct, runner_trail_pct=self.sniper_runner_trail_pct,
                        max_hold_h=self.sniper_max_hold_h, position_pct=min(self.sniper_position_pct, HARD_MAX_POSITION_PCT),
-                       max_open_positions=self.sniper_max_open_positions)
+                       max_open_positions=self.sniper_max_open_positions,
+                       max_pool_impact_pct=self.sniper_max_pool_impact_pct, slippage_bps=self.sniper_slippage_bps)
 
     @property
     def score_weights(self) -> dict[str, float]:

@@ -65,7 +65,7 @@ class Executor:
         from .filter import BONDING_CURVE_DEXES, curve_liq_estimate
         if (q["pair"].get("dexId") or "").lower() in BONDING_CURVE_DEXES:
             liq = max(liq, curve_liq_estimate(float(q.get("mcap") or c.mcap or 0)))
-        size = min(equity_usd * pct / 100, liq * self.cfg.max_pool_impact_pct / 100, cash_usd)
+        size = min(equity_usd * pct / 100, liq * self.cfg.rules(book).max_pool_impact_pct / 100, cash_usd)
         if size < self.cfg.min_trade_usd:
             return kill("size_too_small", f"size ${size:.2f} (cash ${cash_usd:.2f}, liq ${liq:,.0f})", cooldown=5)
         return OrderTicket(pick=pick, book=book, size_usd=round(size, 2), ref_price=px,

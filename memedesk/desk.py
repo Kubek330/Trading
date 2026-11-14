@@ -74,7 +74,8 @@ class Desk:
         self.grok = grok or Grok(self.http, cfg.grok_url, cfg.xai_api_key, cfg.grok_model)
         self.logger.notifier = Telegram(self.http, cfg.telegram_bot_token, cfg.telegram_chat_id)
         self.broker = PaperBroker(self.logger, cfg.paper_start_usd, cfg.slippage_bps,
-                                  cfg.paper_fee_bps, cfg.books)
+                                  cfg.paper_fee_bps, cfg.books,
+                                  {b: cfg.rules(b).slippage_bps for b in cfg.books})
         self.whale = WhaleScout(cfg, gecko, dex, rug, self.chain, self.logger)
         self.scout = Scout(cfg, dex, gecko, self.logger)
         self.filter = Filter(cfg, rpc, rug, bundles, self.logger, jup=self.jup)
