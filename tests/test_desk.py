@@ -520,7 +520,7 @@ def test_missing_trade_tape_defers_instead_of_scoring_zero(tmp_path):
 def test_fast_profile_buys_on_first_sighting(tmp_path, monkeypatch):
     monkeypatch.setenv("DESK_PROFILE", "fast")
     c = Config.load(tmp_path / "none.env")
-    assert (c.min_score, c.scan_interval_s, c.holder_growth_optional) == (55, 60, True)
+    assert (c.min_score, c.scan_interval_s, c.holder_growth_optional) == (50, 60, True)
     d, _ = make_desk(tmp_path, profile="fast", min_score=55, holder_growth_optional=True)
     d.logger.db.execute("DELETE FROM holders")            # first sighting: no growth history at all
     d.logger.db.commit()
@@ -680,3 +680,16 @@ def test_sniper_low_mcap_curve_coin_sized_to_reserves_with_higher_slippage(tmp_p
     [p] = d.logger.positions("open", "sniper")
     assert p.cost_usd == pytest.approx(7_500 * 0.10 * 0.05)            # 5% of the ~10%-of-mcap reserve estimate
     assert p.entry_price == pytest.approx(0.001 * 1.04 / (1 - 0.005))   # 4% sniper slippage + fee
+
+
+def test_unlabelled_curve_recognised_but_zero_liq_amm_still_killed():
+    from memedesk.agents.filter import on_bonding_curve
+    from memedesk.agents.scout import candidate_from_pair
+    p = young_pair(mint="Abc111111111111111111111111111111111111pump")
+    p["dexId"], p["liquidity"]["usd"] = "pumpdotfun-v2", 0
+    assert on_bonding_curve(candidate_from_pair(p, []))
+    p["dexId"] = "raydium"
+    assert not on_bonding_curve(candidate_from_pair(p, []))
+    p2 = young_pair()
+    p2["dexId"], p2["liquidity"]["usd"] = "unknownswap", 0
+    assert not on_bonding_curve(candidate_from_pair(p2, []))          # not a launchpad mint

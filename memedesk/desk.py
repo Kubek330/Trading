@@ -326,7 +326,9 @@ class Desk:
         except Exception:
             log.exception("sniper arm failed")
         eq = {b: round(self.equity(b)[0], 2) for b in self.cfg.books}
-        self.last_cycle = {"ts": time.time(), "secs": round(time.time() - t0, 1), "outcome": out, "equity": eq}
+        self.last_cycle = {"ts": time.time(), "secs": round(time.time() - t0, 1), "outcome": out, "equity": eq,
+                           "http": dict(self.http.stats), "limited_by_host": dict(getattr(self.http, "limited_by_host", {})),
+                           "sniper_tracking": len(self.sniper.track) if self.sniper else 0}
         self.logger.event("desk", "cycle", reason="scan",
                           detail=f"{out} | equity {eq} | {time.time() - t0:.0f}s | http {self.http.stats}",
                           data=self.last_cycle)

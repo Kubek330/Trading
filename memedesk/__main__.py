@@ -45,6 +45,16 @@ def main(argv: list[str] | None = None) -> int:
         print(f"last {args.hours or 1:g}h · profile {cfg.profile} · min score {cfg.min_score:g}\n")
         scouted = q("SELECT COUNT(DISTINCT mint) FROM events WHERE kind='scouted' AND ts>=?")[0][0]
         print(f"scout: {scouted} coins in the 30m-72h window, watchlist {lg.watch_count()}")
+        row = lg.db.execute("SELECT data FROM events WHERE kind='cycle' ORDER BY ts DESC LIMIT 1").fetchone()
+        if row:
+            lc = json.loads(row[0])
+            o, h = lc.get("outcome", {}), lc.get("http", {})
+            print(f"last scan: {lc.get('secs')}s · sniper tracking {lc.get('sniper_tracking', '?')} young coins · "
+                  f"{o.get('sniper_skips', 0)} sniper skips · http {h.get('requests', '?')} req, "
+                  f"{h.get('rate_limited', '?')}x429, {h.get('errors', '?')} errors")
+            lim = lc.get("limited_by_host") or {}
+            if lim:
+                print("rate-limited by: " + ", ".join(f"{k} {v}" for k, v in sorted(lim.items(), key=lambda kv: -kv[1])))
         for book, label in (("", "main desk filter (shared)"), ("scored", "analyst / scored book"),
                             ("random", "random book"), ("sniper", "sniper book")):
             rows = q("SELECT agent, reason, COUNT(*) n, MAX(detail) FROM kills WHERE ts>=? AND book=? "

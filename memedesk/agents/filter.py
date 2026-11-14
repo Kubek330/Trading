@@ -21,8 +21,17 @@ SOFT_CHECKS = {"bundle", "dev_history"}
 BONDING_CURVE_DEXES = {"pumpfun", "pump.fun", "moonshot", "launchlab", "raydium-launchlab", "boop", "believe"}
 
 
+AMM_DEXES = {"raydium", "orca", "meteora", "pumpswap", "meteoradbc", "fluxbeam", "lifinity"}
+
+
 def on_bonding_curve(c: Candidate) -> bool:
-    return (c.dex_id or "").lower() in BONDING_CURVE_DEXES
+    dex = (c.dex_id or "").lower()
+    if dex in BONDING_CURVE_DEXES:
+        return True
+    # DexScreener doesn't always label curves; a launchpad vanity mint with ~$0 reported liquidity on a
+    # venue that isn't a known AMM is a curve (an AMM pool with $0 liquidity stays a kill).
+    return (dex not in AMM_DEXES and c.liquidity_usd < 500 and c.mcap > 0
+            and (c.mint.endswith("pump") or c.mint.endswith("bonk")))
 
 
 def curve_liq_estimate(mcap: float) -> float:

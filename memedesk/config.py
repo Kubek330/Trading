@@ -33,7 +33,7 @@ PROFILES = {
     "active": {"min_score": 60.0},
     # fast: like active, but buys sooner: no 10-min wait for holder growth on first sighting,
     # score >= 55, scans every 60s, rejected coins re-checked after 3 min. Safety filters unchanged.
-    "fast": {"min_score": 55.0, "scan_interval_s": 60.0, "score_kill_cooldown_min": 3.0,
+    "fast": {"min_score": 50.0, "scan_interval_s": 60.0, "score_kill_cooldown_min": 3.0,
              "holder_growth_optional": True, "min_liq_mcap_pct": 3.0,
              "sniper_min_liq": 5_000.0, "sniper_min_txns_m5": 15,
              "sniper_min_buy_sell_m5": 1.2, "sniper_max_m5_pct": 100.0, "monitor_interval_s": 5.0,
