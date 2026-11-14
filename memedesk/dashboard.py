@@ -74,6 +74,29 @@ def _funnel(L, since: float) -> dict:
             "reasons": [{"agent": a, "reason": r, "n": n} for a, r, n in reasons]}
 
 
+def _insights(L, books: list[str]) -> dict:
+    """What works so far, from closed trades only (empty until there are some)."""
+    rows = [p for b in books for p in L.positions("closed", b)]
+
+    def agg(group):
+        out = []
+        for key, ps in group.items():
+            rets = [p.pnl_pct for p in ps if p.pnl_pct is not None]
+            if rets:
+                out.append({"key": key, "n": len(rets), "win": round(100 * sum(r > 0 for r in rets) / len(rets)),
+                            "avg": round(sum(rets) / len(rets), 1)})
+        return sorted(out, key=lambda r: -r["n"])
+
+    by_exit, by_score, by_book = {}, {}, {}
+    for p in rows:
+        by_exit.setdefault(p.exit_reason or "?", []).append(p)
+        by_book.setdefault(p.book, []).append(p)
+        if p.book == "scored" and p.score is not None:
+            band = "80+" if p.score >= 80 else "70–79" if p.score >= 70 else "60–69" if p.score >= 60 else "<60"
+            by_score.setdefault(f"score {band}", []).append(p)
+    return {"n": len(rows), "by_book": agg(by_book), "by_score": agg(by_score), "by_exit": agg(by_exit)}
+
+
 def build_state(desk) -> dict:
     L, cfg, now = desk.logger, desk.cfg, time.time()
     with L.lock:
@@ -119,6 +142,7 @@ def build_state(desk) -> dict:
         "books": {b: _book_view(desk, b, now, curve) for b in cfg.books}, "compare": cmp,
         "curve": curve, "decisions": decisions, "ticker": ticker, "agents": agents,
         "funnel": {**_funnel(L, now - 3600), "watching": L.watch_count()},
+        "insights": _insights(L, cfg.books),
         "wallets": [{"address": w["address"], "score": w["score"], "winners": len(w["winners"]),
                      "pnl_sol": w["pnl_sol"], "last_seen": w["last_seen"]} for w in tracked],
         "whale": {"backend": desk.chain.backend, "last_run": desk.whale.last_run,
@@ -301,6 +325,22 @@ td,th{padding:6px 4px;border-top:1px solid var(--line);text-align:left;white-spa
 td.r,th.r{text-align:right}
 .verdict{font:14px/1.5 var(--sans)}
 footer{color:var(--dim);font-size:10px;margin-top:16px;line-height:1.7}
+@media (min-width:1000px){
+ main{max-width:1200px;padding:18px 28px 56px}
+ .hero{display:grid;grid-template-columns:minmax(340px,440px) minmax(0,1fr);grid-template-rows:auto auto auto 1fr;column-gap:36px;align-items:start}
+ .hero #bal,.hero #stats,.hero #pnlrow{grid-column:1}
+ .hero #chart{grid-column:2;grid-row:1/5;height:230px;margin:6px 0 0}
+ .hero #axis{grid-column:2}
+ .dpill{right:auto;left:360px}
+ .tabs{max-width:620px}
+ [data-pane="desk"],[data-pane="random"],[data-pane="sniper"]{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;align-items:start}
+ [data-pane] .card{margin:0}
+ [data-pane="pipeline"]{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:28px;align-items:start}
+}
+@media (min-width:1500px){
+ main{max-width:1440px}
+ [data-pane="desk"]{grid-template-columns:repeat(3,minmax(0,1fr))}
+}
 [hidden]{display:none!important}
 </style></head><body><main>
 <header><div class="logo" id="logo"></div><h1>MemeDesk</h1><span class="pill" id="mode">…</span>
@@ -319,6 +359,7 @@ footer{color:var(--dim);font-size:10px;margin-top:16px;line-height:1.7}
  <div class="card"><h2><span>positions · <span id="pcount">0</span> coins</span><small>entry → now</small></h2><div id="pos"></div></div>
  <div class="card"><h2><span>Desk core · decisions</span><span class="stream" id="stream"><span class="dot on"></span>streaming</span></h2><div id="dec"></div></div>
  <div class="card"><h2>funnel<small>last hour</small></h2><div id="funnel"></div></div>
+ <div class="card"><h2>what works<small id="incount"></small></h2><div id="insights"></div></div>
 </section>
 <section data-pane="pipeline" hidden>
  <div class="pipeline" id="pipe"></div>
@@ -421,6 +462,10 @@ async function tick(){
  const F=S.funnel,mx=Math.max(1,...F.reasons.map(r=>r.n));
  $("funnel").innerHTML=`<div class="funnel"><b>${F.scouted}</b> scouted <i>→</i> <b>${F.vetted}</b> safe <i>→</i> <b>${F.scored}</b> score ≥ ${S.rules.min_score} <i>→</i> <b>${F.bought}</b> bought</div><div class="mute" style="font-size:11px;margin:-4px 0 8px">${F.watching} coins on the watchlist, re-checked as they mature</div>`
   +(F.reasons.length?'<div class="mute" style="font-size:11px;margin-bottom:4px">most common kills</div>'+F.reasons.map(r=>`<div class="bar"><span class="l">${esc(r.agent)} · ${esc(r.reason)}</span><span class="tr"><span class="f" style="width:${(100*r.n/mx).toFixed(0)}%"></span></span><span class="k">${r.n}</span></div>`).join(""):'<div class="empty">no kills in the last hour</div>');
+ const I=S.insights;$("incount").textContent=I.n?`${I.n} closed trades`:"";
+ const itab=(title,rows)=>rows.length?`<div class="mute" style="font-size:11px;margin:8px 0 2px">${title}</div><table><tr><th></th><th class="r">trades</th><th class="r">win</th><th class="r">avg</th></tr>${rows.map(r=>`<tr><td>${esc(r.key)}</td><td class="r">${r.n}</td><td class="r">${r.win}%</td><td class="r ${cls(r.avg)}">${pct(r.avg)}</td></tr>`).join("")}</table>`:"";
+ $("insights").innerHTML=I.n?itab("by book",I.by_book)+itab("by analyst score",I.by_score)+itab("by exit",I.by_exit)
+  :'<div class="empty">fills in as trades close · after 20+ per book this shows which scores, books and exits make money</div>';
  const ST={ready:"✓ ready",working:"● working",error:"✕ error",off:"off"},flow=ORDER.filter(k=>S.agents[k]&&k!=="random"&&k!=="sniper");
  const card=(k,nx)=>{const a=S.agents[k];return`<div class="agent ${a.state}${nx?"":" end"}" id="ag-${k}" style="--c:var(--${k});--c2:var(--${nx||k})"><div class="tile">${bot(k,40)}</div>
   <div style="min-width:0"><div class="nm" style="color:var(--ink)">${esc(a.name)}</div><div class="ds">${esc(a.desc)}</div>

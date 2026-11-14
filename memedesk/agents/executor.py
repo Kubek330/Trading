@@ -49,6 +49,14 @@ class Executor:
         drift = 100 * (px / c.price_usd - 1) if c.price_usd else 0.0
         if abs(drift) > self.cfg.max_price_drift_pct:
             return kill("price_moved", f"moved {drift:+.1f}% since vetting", cooldown=5)
+        # confirmation: never buy into a dump that is happening right now
+        m5 = float((q["pair"].get("priceChange") or {}).get("m5") or 0)
+        tx5 = (q["pair"].get("txns") or {}).get("m5") or {}
+        b5, s5 = int(tx5.get("buys") or 0), int(tx5.get("sells") or 0)
+        if m5 < -self.cfg.entry_max_m5_drop_pct:
+            return kill("dipping_now", f"{m5:.1f}% over the last 5m", cooldown=2)
+        if b5 + s5 >= 10 and s5 and b5 / s5 < self.cfg.entry_min_buy_sell_m5:
+            return kill("sellers_now", f"5m buy/sell {b5}/{s5}", cooldown=2)
         h1 = float((q["pair"].get("priceChange") or {}).get("h1") or 0)
         if book != "sniper" and h1 > self.cfg.max_h1_change_pct:  # sniper judges brand-new coins by its own m5 rules
             return kill("pumped_1h", f"+{h1:.0f}% in 1h at requote", cooldown=60)

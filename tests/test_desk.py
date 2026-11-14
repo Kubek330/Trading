@@ -233,7 +233,7 @@ def test_random_draws_from_filter_survivors_matching_pass_count(tmp_path):
     pairs = [pair(mint=m, sym=f"T{i}") for i, m in enumerate(mints)]
     # only T0 is strong enough to score; the rest are weak but safe
     for p in pairs[1:]:
-        p["priceChange"] = {"m5": -4, "h1": -15, "h6": -10}
+        p["priceChange"] = {"m5": 0, "h1": -15, "h6": -10}
         p["txns"]["h1"] = {"buys": 100, "sells": 400}
     d, _ = make_desk(tmp_path, pairs=pairs)
     d.analyst.gecko = type("G", (), {"trades": lambda self, pool, window_min=60:
@@ -638,3 +638,33 @@ def test_smart_wallets_are_bonus_only(tmp_path):
     d.analyst._fixed = {"SomeoneElse"}
     no_hit = Analyst.run(d.analyst, v).score
     assert no_hit >= 60 and with_hit >= no_hit - 15             # absence no longer drags the score to ~0 on that weight
+
+
+def test_entry_confirmation_blocks_buying_into_a_dump(tmp_path):
+    p = pair()
+    p["priceChange"]["m5"] = -6
+    d, _ = make_desk(tmp_path, pairs=[p], random_control=False)
+    d.scan_cycle()
+    assert "dipping_now" in kills(d, "scored") and not d.logger.positions()
+    p2 = pair()
+    p2["txns"]["m5"] = {"buys": 4, "sells": 12}
+    d2, _ = make_desk(tmp_path / "b", pairs=[p2], random_control=False)
+    d2.scan_cycle()
+    assert "sellers_now" in kills(d2, "scored")
+
+
+def test_dump_exit_cuts_loser_before_hard_stop(tmp_path):
+    d, dex = make_desk(tmp_path, random_control=False)
+    d.scan_cycle()
+    [p] = d.logger.positions("open")
+    pr = dex.pairs[GOOD]
+    pr["priceChange"]["m5"] = -12
+    pr["txns"]["m5"] = {"buys": 6, "sells": 20}
+    dex.set_price(GOOD, p.entry_price * 0.92)                  # -8%: hard stop (-15%) not hit yet
+    d.risk.monitor(d.executor, threading.RLock())
+    [c] = d.logger.positions("closed")
+    assert c.exit_reason == "dump_exit" and -12 < c.pnl_pct < -5
+    # a winner dipping on sell pressure is not dumped
+    from memedesk.agents.risk import dump_check
+    c.entry_price, c.status = 0.0005, "open"
+    assert dump_check(c, 0.0009, pr, d.cfg) is None

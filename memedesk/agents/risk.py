@@ -22,7 +22,7 @@ log = logging.getLogger("memedesk.risk")
 
 EXIT_LABELS = {"stop_loss": "stop loss", "take_profit": "take profit 75%", "runner_trail": "trail exit",
                "runner_breakeven": "breakeven exit", "max_hold": "48h max hold", "liq_crash": "liquidity crash",
-               "pool_vanished": "pool vanished"}
+               "pool_vanished": "pool vanished", "dump_exit": "dump detected"}
 PRICE_MISS_LIMIT = 20  # consecutive ticks with no price => pool treated as gone
 
 
@@ -58,6 +58,19 @@ def step(p: Position, price: float, liq: float | None, now: float, cfg: Config
         frac = cfg.tp_sell_pct / 100
         return ("exit" if frac >= 1 else "partial", frac, "take_profit"), events
     return None, events
+
+
+def dump_check(p: Position, price: float, pair: dict, cfg: Config):
+    """Early exit on a live dump: below entry, -10%+ over 5 min and sellers >= 2x buyers.
+    Cuts the losers that would otherwise gap through the hard stop between price checks."""
+    if not cfg.dump_exit or price >= p.entry_price:
+        return None
+    m5 = float((pair.get("priceChange") or {}).get("m5") or 0)
+    tx = (pair.get("txns") or {}).get("m5") or {}
+    b, s = int(tx.get("buys") or 0), int(tx.get("sells") or 0)
+    if m5 <= -cfg.dump_m5_pct and s >= max(5, cfg.dump_sell_ratio * b):
+        return ("exit", 1.0, "dump_exit")
+    return None
 
 
 class Risk:
@@ -124,6 +137,8 @@ class Risk:
                 p.price_misses = 0
                 price = q["price"]
                 action, events = step(p, price, q["liq"], now, self.cfg.rules(p.book))
+                if action is None:
+                    action = dump_check(p, price, q.get("pair") or {}, self.cfg)
                 for e in events:
                     self.logger.event(self.name, "stop_move", p.mint, p.symbol, p.book, e)
                 self.logger.save_position(p)

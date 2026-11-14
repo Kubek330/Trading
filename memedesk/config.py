@@ -36,7 +36,7 @@ PROFILES = {
     "fast": {"min_score": 55.0, "scan_interval_s": 60.0, "score_kill_cooldown_min": 3.0,
              "holder_growth_optional": True, "min_liq_mcap_pct": 3.0,
              "sniper_min_mcap": 15_000.0, "sniper_min_liq": 5_000.0, "sniper_min_txns_m5": 15,
-             "sniper_min_buy_sell_m5": 1.2, "sniper_max_m5_pct": 100.0},
+             "sniper_min_buy_sell_m5": 1.2, "sniper_max_m5_pct": 100.0, "monitor_interval_s": 5.0},
 }
 
 # Hard ceiling that config cannot raise. Executor and risk enforce it independently.
@@ -163,6 +163,11 @@ class Config:
     max_open_positions: int = 5              # per book
     daily_loss_limit_pct: float = 20.0       # halt new entries in a book past this UTC-day drawdown
     liq_crash_exit_pct: float = 50.0         # rug guard: exit if pool liquidity halves
+    dump_exit: bool = True                   # exit early on a live dump, before the hard stop
+    dump_m5_pct: float = 10.0                #   ...price down >= this % over the last 5 min
+    dump_sell_ratio: float = 2.0             #   ...and sells >= this x buys in the last 5 min (position below entry)
+    entry_max_m5_drop_pct: float = 3.0       # don't buy while it is dropping more than this over 5 min
+    entry_min_buy_sell_m5: float = 1.0       # ...or while sellers outnumber buyers (when >= 10 trades in 5 min)
     reentry_cooldown_h: float = 24.0
 
     # ---- loop -------------------------------------------------------------

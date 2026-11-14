@@ -67,6 +67,13 @@ If nothing gets bought:
 - **Jupiter organic score** (`JUP_API_KEY`, free at portal.jup.ag): Jupiter's 0–100 estimate of how much of a token's trading comes from real wallets rather than wash trading or bots. A token below 30 is killed. The check runs before the RugCheck/RPC calls, and one request scores the whole batch. If Jupiter has no score for a token, it isn't killed unless `DESK_ORGANIC_FAIL_CLOSED=true`.
 - **CoinGecko Demo** (`COINGECKO_API_KEY`): the free plan is capped at **10,000 calls a month**, which an always-on bot would use up within a day. So it's used only as a backup: when the public GeckoTerminal API returns 429, the same request goes to CoinGecko's onchain API instead. The monthly count is stored, the bot stops using the key at `DESK_COINGECKO_MONTHLY_CAP` (default 9,500), and the dashboard footer shows how much has been used.
 
+## Loss control (all books)
+
+- **Entry confirmation:** just before buying, the executor re-reads the last 5 minutes. It won't buy while the price is down more than 3% or while sellers outnumber buyers (when there are at least 10 trades); it re-checks after 2 minutes.
+- **Dump exit:** if a position is below entry and, over the last 5 minutes, the price is down 10% or more and sells are at least 2× buys, it exits at once instead of waiting to gap through the hard stop. Turn it off with `DESK_DUMP_EXIT=false`.
+- **Fast profile:** stops are checked every 5 s instead of every 15 s.
+- **"What works" card:** win rate and average return per book, per analyst-score band, and per exit reason, from closed trades only.
+
 ## Sniper (separate experiment)
 
 The sniper hunts **brand-new coins, 3–30 minutes old**: the ones the main desk rejects as too young. It trades its own $1000 paper book, shown on the **Sniper** tab, so its results never mix with the scored or random books.
@@ -146,4 +153,4 @@ sqlite3 data/desk_paper.db "select agent, book, reason, count(*) from kills grou
 pip install pytest && python -m pytest -q
 ```
 
-There are 61 offline tests. They cover every filter kill rule (including top-10 holders with the pool vault excluded), the 8% cap, the −15% stop, the +35% partial sell, the runner trailing stop and its floor at entry, the 48h max hold, the Random arm's matched draws from filter survivors, handoff enforcement, the comparison verdicts, the dashboard server, HTTP backoff and caching, a check that only the standard library is imported, and Whale Scout: winner detection, wallet scoring/exclusions/add-drop reasons, whale-mode signals going through Filter/Analyst/Risk, both transaction parsers, signature paging, and pump.fun bonding-curve derivation.
+There are 63 offline tests. They cover every filter kill rule (including top-10 holders with the pool vault excluded), the 8% cap, the −15% stop, the +35% partial sell, the runner trailing stop and its floor at entry, the 48h max hold, the Random arm's matched draws from filter survivors, handoff enforcement, the comparison verdicts, the dashboard server, HTTP backoff and caching, a check that only the standard library is imported, and Whale Scout: winner detection, wallet scoring/exclusions/add-drop reasons, whale-mode signals going through Filter/Analyst/Risk, both transaction parsers, signature paging, and pump.fun bonding-curve derivation.
