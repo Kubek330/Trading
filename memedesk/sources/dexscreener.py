@@ -71,4 +71,5 @@ class DexScreener:
                     "mcap": _f(p.get("marketCap")) or _f(p.get("fdv")),
                     "h1": _f((p.get("priceChange") or {}).get("h1")),
                     "symbol": (p.get("baseToken") or {}).get("symbol", ""),
+                    "image": str(((p.get("info") or {}).get("imageUrl")) or ""),
                     "pair": p} for m, p in best.items()}

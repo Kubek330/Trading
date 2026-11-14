@@ -32,6 +32,7 @@ def candidate_from_pair(p: dict, sources: list[str], now: float | None = None) -
         volume={k: _f(v) for k, v in (p.get("volume") or {}).items()},
         sources=sources,
         seen_ts=now or time.time(),
+        image=str(((p.get("info") or {}).get("imageUrl")) or ""),
     )
 
 

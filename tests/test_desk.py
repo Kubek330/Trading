@@ -112,6 +112,17 @@ class FakeBundles:
         return (self.pct, "test") if self.pct is not None else (None, None)
 
 
+class FakeJup:
+    def __init__(self, score=80.0, label="high"):
+        self.score, self.label = score, label
+
+    def prefetch(self, mints):
+        pass
+
+    def organic(self, mint):
+        return None if self.score is None else {"score": self.score, "label": self.label, "verified": False}
+
+
 class NoGrok:
     enabled = False
 
@@ -119,14 +130,15 @@ class NoGrok:
         return ""
 
 
-def make_desk(tmp_path, pairs=None, rep=None, rpc=None, bundles=None, gecko=None, **cfg_over):
+def make_desk(tmp_path, pairs=None, rep=None, rpc=None, bundles=None, gecko=None, jup=None, **cfg_over):
     cfg_over.setdefault("random_seed", 7)
+    cfg_over.setdefault("profile", "strict")
     cfg = Config(data_dir=str(tmp_path), **cfg_over)
     cfg.validate()
     dex = FakeDex(pairs or [pair()])
     d = Desk(cfg, dex=dex, gecko=gecko or FakeGecko(), rpc=rpc or FakeRPC(),
              rug=FakeRug(report() if rep is None else rep), bundles=bundles or FakeBundles(),
-             grok=NoGrok(), smart_wallets={"SmartA", "SmartB"})
+             grok=NoGrok(), smart_wallets={"SmartA", "SmartB"}, jup=jup or FakeJup())
     # pre-seed a holder snapshot 30 min ago so holder growth is measurable
     d.logger.db.execute("INSERT INTO holders(mint,ts,holders) VALUES(?,?,?)", (GOOD, time.time() - 1800, 2000))
     d.logger.db.commit()
@@ -421,3 +433,56 @@ def test_no_compiled_or_third_party_imports():
                 continue
             for n in names:
                 assert n.split(".")[0] in allowed, f"{f}: imports {n}"
+
+
+def test_active_profile_lets_soft_unknowns_through_but_not_hard_ones(tmp_path, monkeypatch):
+    monkeypatch.delenv("DESK_PROFILE", raising=False)
+    monkeypatch.delenv("DESK_MIN_SCORE", raising=False)
+    c = Config.load(tmp_path / "none.env")
+    assert c.profile == "active" and c.min_score == 60
+    monkeypatch.setenv("DESK_MIN_SCORE", "75")
+    assert Config.load(tmp_path / "none.env").min_score == 75          # explicit setting wins
+    d, _ = make_desk(tmp_path, bundles=FakeBundles(None), profile="active")
+    d.scan_cycle()
+    assert "unknown_bundle" not in kills(d) and d.logger.positions("open", "scored")
+    d2, _ = make_desk(tmp_path / "b", rpc=FakeRPC(fail=True), rep=report(token={"supply": 1}), profile="active")
+    d2.scan_cycle()
+    assert "unknown_mint_authority" in kills(d2) and not d2.logger.positions()
+
+
+def test_organic_score_filter(tmp_path):
+    d, _ = make_desk(tmp_path, jup=FakeJup(score=12, label="low"))
+    d.scan_cycle()
+    assert "organic_low" in kills(d) and not d.logger.positions()
+    d2, _ = make_desk(tmp_path / "b", jup=FakeJup(score=None))       # unknown: not a kill by default
+    d2.scan_cycle()
+    assert d2.logger.positions("open", "scored")
+
+
+def test_coingecko_backup_only_on_429_and_capped(tmp_path):
+    from memedesk.agents.logger import Logger
+    from memedesk.http import DataError
+    from memedesk.sources.geckoterminal import GeckoTerminal, MonthlyBudget
+
+    class H:
+        def __init__(self):
+            self.urls = []
+
+        def get(self, url, **kw):
+            self.urls.append(url)
+            if "geckoterminal" in url:
+                raise DataError("GET api.geckoterminal.com failed after 2 tries: HTTP 429")
+            return {"data": []}
+
+    lg = Logger(tmp_path)
+    h = H()
+    g = GeckoTerminal(h, "https://api.geckoterminal.com/api/v2", "demo-key", MonthlyBudget(lg, "cg", 2))
+    g.trades("pool1")
+    g.trades("pool2")
+    assert sum("coingecko.com/api/v3/onchain" in u for u in h.urls) == 2
+    with pytest.raises(DataError, match="budget used up"):
+        g.trades("pool3")
+    h2 = H()
+    with pytest.raises(DataError, match="429"):                      # no key: no backup, just the error
+        GeckoTerminal(h2, "https://api.geckoterminal.com/api/v2").trades("pool4")
+    assert all("coingecko.com" not in u for u in h2.urls)

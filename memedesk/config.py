@@ -24,6 +24,15 @@ import os
 from dataclasses import dataclass, fields
 from pathlib import Path
 
+# Profiles only change defaults; any DESK_* variable you set still wins.
+#   strict: every unknown safety datum kills, score >= 70 (the original spec)
+#   active: unknown bundle / dev-history data no longer kills (authorities, LP,
+#           top-10 and dev holdings stay fail-closed), score >= 60
+PROFILES = {
+    "strict": {"min_score": 70.0},
+    "active": {"min_score": 60.0},
+}
+
 # Hard ceiling that config cannot raise. Executor and risk enforce it independently.
 HARD_MAX_POSITION_PCT = 8.0
 
@@ -46,6 +55,7 @@ def _bool(v: str) -> bool:
 
 @dataclass
 class Config:
+    profile: str = "strict"                  # Config.load() defaults to "active"; see PROFILES
     paper_start_usd: float = 1000.0          # per book (scored and random each get this)
     data_dir: str = "data"
 
@@ -65,6 +75,8 @@ class Config:
     max_bundle_pct: float = 10.0
     max_h1_change_pct: float = 80.0
     fail_closed: bool = True                 # unknown safety data => kill
+    min_organic_score: float = 30.0          # Jupiter organicScore 0-100; kill below (0 disables)
+    organic_fail_closed: bool = False        # Jupiter has no score for the token => kill?
 
     # ---- analyst ----------------------------------------------------------
     min_score: float = 70.0
@@ -98,6 +110,9 @@ class Config:
     whale_signal_window_min: float = 10.0
     whale_watch_interval_s: float = 0.0      # poll tracked wallets (0 = auto: 60s Helius / 180s public)
     helius_api_key: str = ""
+    jup_api_key: str = ""                    # free at portal.jup.ag (organic score)
+    coingecko_api_key: str = ""              # CoinGecko Demo: backup when GeckoTerminal says 429
+    coingecko_monthly_cap: int = 9500        # Demo plan allows 10,000 calls/month; keep a margin
 
     # ---- executor ---------------------------------------------------------
     position_pct: float = 8.0                # of the book's equity; clamped to 8
@@ -152,10 +167,18 @@ class Config:
     def load(cls, env_file: str | Path = ".env") -> "Config":
         _load_dotenv(Path(env_file))
         cfg = cls()
+        prof = (os.environ.get("DESK_PROFILE") or "active").strip().lower()
+        if prof not in PROFILES:
+            raise ValueError(f"DESK_PROFILE must be one of {sorted(PROFILES)}, got {prof!r}")
+        cfg.profile = prof
+        for k, v in PROFILES[prof].items():
+            setattr(cfg, k, v)
         for f in fields(cls):
+            if f.name == "profile":
+                continue
             raw = os.environ.get(f"DESK_{f.name.upper()}")
             if raw is None and f.name in {"xai_api_key", "telegram_bot_token", "telegram_chat_id",
-                                          "helius_api_key"}:
+                                          "helius_api_key", "jup_api_key", "coingecko_api_key"}:
                 raw = os.environ.get(f.name.upper())
             if raw is None or raw == "":
                 continue

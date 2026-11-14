@@ -32,7 +32,8 @@ from .models import Candidate, Kill, RandomPick, Scorecard, Vetted
 from .sources.bundles import BundleChecker
 from .sources.chain import ChainReader
 from .sources.dexscreener import DexScreener
-from .sources.geckoterminal import GeckoTerminal
+from .sources.geckoterminal import GeckoTerminal, MonthlyBudget
+from .sources.jupiter import JupiterTokens
 from .sources.grok import Grok, Telegram
 from .sources.rugcheck import RugCheck
 from .sources.solana_rpc import SolanaRPC
@@ -44,10 +45,11 @@ AGENTS = ["whale_scout", "scout", "filter", "analyst", "executor", "risk", "logg
 
 class Desk:
     def __init__(self, cfg: Config, *, http=None, dex=None, gecko=None, rpc=None, rug=None,
-                 bundles=None, grok=None, logger=None, smart_wallets=None, chain=None):
+                 bundles=None, grok=None, logger=None, smart_wallets=None, chain=None, jup=None):
         self.cfg = cfg
         self.http = http or HttpClient(timeout=cfg.http_timeout_s, rpm={
-            "api.mainnet-beta.solana.com": cfg.rpc_rpm, "mainnet.helius-rpc.com": 500, "api.helius.xyz": 100})
+            "api.mainnet-beta.solana.com": cfg.rpc_rpm, "mainnet.helius-rpc.com": 500, "api.helius.xyz": 100,
+            "api.coingecko.com": 30, "api.jup.ag": 50, "lite-api.jup.ag": 50})
         self.logger = logger or Logger(cfg.data_dir)
         self.agents = {a: {"state": "ready", "last": "", "ts": None} for a in AGENTS}
         if not cfg.whale_scout:
@@ -56,7 +58,10 @@ class Desk:
             self.agents["random"]["state"] = "off"
         self.logger.listeners.append(self._on_event)
         self.dex = dex = dex or DexScreener(self.http, cfg.dexscreener_url)
-        gecko = gecko or GeckoTerminal(self.http, cfg.geckoterminal_url)
+        self.cg_budget = MonthlyBudget(self.logger, "coingecko_demo", cfg.coingecko_monthly_cap)
+        gecko = gecko or GeckoTerminal(self.http, cfg.geckoterminal_url, cfg.coingecko_api_key, self.cg_budget)
+        self.jup = jup if jup is not None else (
+            JupiterTokens(self.http, cfg.jup_api_key) if cfg.min_organic_score > 0 else None)
         self.chain = chain or ChainReader(self.http, cfg.solana_rpc_url, self.logger, cfg.helius_api_key)
         rpc = rpc or SolanaRPC(self.http, self.chain.rpc_url)
         rug = rug or RugCheck(self.http, cfg.rugcheck_url)
@@ -67,7 +72,7 @@ class Desk:
                                   cfg.paper_fee_bps, cfg.books)
         self.whale = WhaleScout(cfg, gecko, dex, rug, self.chain, self.logger)
         self.scout = Scout(cfg, dex, gecko, self.logger)
-        self.filter = Filter(cfg, rpc, rug, bundles, self.logger)
+        self.filter = Filter(cfg, rpc, rug, bundles, self.logger, jup=self.jup)
         self.analyst = Analyst(cfg, gecko, self.logger, self.grok, smart_wallets)
         self.random = RandomControl(cfg.random_seed) if cfg.random_control else None
         self.executor = Executor(cfg, self.broker, dex, self.logger)
@@ -131,7 +136,7 @@ class Desk:
 
     def _watch(self, c: Candidate) -> None:
         self.watch[c.mint] = {"mint": c.mint, "symbol": c.symbol, "h1": c.price_change.get("h1"),
-                              "pair": c.pair_address, "ts": time.time()}
+                              "pair": c.pair_address, "image": c.image, "mcap": c.mcap, "ts": time.time()}
         if len(self.watch) > 40:
             for m in sorted(self.watch, key=lambda m: self.watch[m]["ts"])[:-40]:
                 del self.watch[m]
@@ -226,6 +231,11 @@ class Desk:
             self._kill(k)
         self.logger.event("scout", "scan", reason=f"{len(cands)} in window", detail=f"{len(kills)} out of window")
         out: dict[str, int] = {"scout_kills": len(kills), "in_window": len(cands)}
+        if self.jup is not None and cands:
+            try:  # one Jupiter call scores the whole batch
+                self.jup.prefetch([c.mint for c in cands])
+            except DataError as e:
+                log.warning("jupiter organic prefetch failed: %s", e)
 
         def bump(k):
             out[k] = out.get(k, 0) + 1

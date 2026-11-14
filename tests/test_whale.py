@@ -4,7 +4,7 @@ import pytest
 
 from memedesk.agents.whale_scout import bot_reason, max_multiple, realized_pnl_sol, wallet_score
 from memedesk.sources.chain import ChainReader, Swap, parse_helius_tx, parse_rpc_tx
-from tests.test_desk import FakeGecko, NoGrok, FakeRPC, FakeRug, FakeBundles, FakeDex, pair, report
+from tests.test_desk import FakeJup, FakeGecko, NoGrok, FakeRPC, FakeRug, FakeBundles, FakeDex, pair, report
 from memedesk.config import Config
 from memedesk.desk import Desk
 
@@ -72,7 +72,7 @@ def whale_desk(tmp_path):
     rep = report()
     rep["creator"] = "C"
     d = Desk(cfg, dex=FakeDex([pair(mint=X, sym="XWHALE")]), gecko=WhaleGecko(), rpc=FakeRPC(),
-             rug=FakeRug(rep), bundles=FakeBundles(), grok=NoGrok(), smart_wallets={"SmartA"}, chain=chain)
+             rug=FakeRug(rep), bundles=FakeBundles(), grok=NoGrok(), smart_wallets={"SmartA"}, chain=chain, jup=FakeJup())
     chain.store = d.logger
     d.logger.save_swaps(chain.extra)
     d.logger.db.execute("INSERT INTO holders(mint,ts,holders) VALUES(?,?,?)", (X, time.time() - 1800, 2000))

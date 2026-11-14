@@ -6,6 +6,7 @@
   python -m memedesk report      # summary of the last N hours (Grok-written if XAI_API_KEY set)
   python -m memedesk positions   # open + recent positions, both books
   python -m memedesk kills       # most recent kills with reasons
+  python -m memedesk doctor      # test every data source from this device
 """
 from __future__ import annotations
 
@@ -20,7 +21,7 @@ from .config import Config
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="memedesk")
-    ap.add_argument("cmd", choices=["run", "once", "dashboard", "report", "positions", "kills"])
+    ap.add_argument("cmd", choices=["run", "once", "dashboard", "report", "positions", "kills", "doctor"])
     ap.add_argument("--env", default=".env")
     ap.add_argument("--hours", type=float, default=12.0)
     ap.add_argument("-n", type=int, default=40)
@@ -30,6 +31,10 @@ def main(argv: list[str] | None = None) -> int:
     cfg = Config.load(args.env)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(levelname).1s %(message)s", datefmt="%H:%M:%S")
+
+    if args.cmd == "doctor":
+        from .doctor import run as doctor
+        return doctor(cfg)
 
     if args.cmd in ("positions", "kills"):
         from .agents.logger import Logger

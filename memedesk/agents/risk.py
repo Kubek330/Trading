@@ -110,7 +110,7 @@ class Risk:
         now = time.time()
         for m, q in quotes.items():
             self.quotes[m] = {"price": q["price"], "mcap": q.get("mcap"), "h1": q.get("h1"),
-                              "symbol": q.get("symbol", ""), "ts": now}
+                              "symbol": q.get("symbol", ""), "image": q.get("image", ""), "ts": now}
         for p in open_pos:
             q = quotes.get(p.mint)
             if not q or q["price"] <= 0:

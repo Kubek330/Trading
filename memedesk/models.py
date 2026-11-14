@@ -52,6 +52,7 @@ class Candidate:
     sources: list[str] = field(default_factory=list)
     trail: list[str] = field(default_factory=lambda: ["scout"])
     reason: str = ""                 # why it was picked up (whale signal text)
+    image: str = ""                  # token logo URL from DexScreener (display only)
     seen_ts: float = field(default_factory=time.time)
 
     @property
@@ -77,6 +78,8 @@ class SafetyFacts:
     top10_pct: float | None = None
     top_holder_owners: list[str] = field(default_factory=list)
     rugcheck_score: float | None = None
+    organic_score: float | None = None
+    organic_label: str | None = None
 
 
 @dataclass

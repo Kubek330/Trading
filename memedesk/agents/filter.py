@@ -12,12 +12,15 @@ from ..sources import rugcheck as rc
 
 log = logging.getLogger("memedesk.filter")
 
+SOFT_CHECKS = {"bundle", "dev_history"}
+
 
 class Filter:
     name = "filter"
 
-    def __init__(self, cfg: Config, rpc, rug, bundles, logger=None, cache_ttl_s: float = 300):
+    def __init__(self, cfg: Config, rpc, rug, bundles, logger=None, cache_ttl_s: float = 300, jup=None):
         self.cfg, self.rpc, self.rug, self.bundles, self.logger = cfg, rpc, rug, bundles, logger
+        self.jup = jup
         self.cache_ttl_s = cache_ttl_s
         self._cache: dict[str, tuple[float, dict]] = {}
 
@@ -73,6 +76,10 @@ class Filter:
                         data={"facts": f.__dict__ if f else None})
 
         def unknown(what: str) -> Kill | None:
+            # "active" profile: a secondary data source being down doesn't block every trade.
+            # Authorities, LP, top-10 and dev holdings stay fail-closed in every profile.
+            if what in SOFT_CHECKS and cfg.profile == "active":
+                return None
             return kill(f"unknown_{what}", f"{what} unavailable (fail-closed)") if cfg.fail_closed else None
 
         # 1. already pumped: cheapest check first
@@ -85,6 +92,15 @@ class Filter:
             return kill("liq_thin", f"liq/mcap {c.liq_mcap_pct:.1f}% < {cfg.min_liq_mcap_pct:.0f}%")
         if rugged:
             return kill("rugged", "RugCheck marks token as rugged")
+        # 2b. Jupiter organic score: real wallets vs wash trading / bots
+        if cfg.min_organic_score > 0 and self.jup is not None:
+            if f.organic_score is None:
+                if cfg.organic_fail_closed:
+                    return kill("unknown_organic", "Jupiter has no organic score (fail-closed)")
+            elif f.organic_score < cfg.min_organic_score:
+                return kill("organic_low", f"Jupiter organic score {f.organic_score:.0f}"
+                            + (f" ({f.organic_label})" if f.organic_label else "")
+                            + f" < {cfg.min_organic_score:.0f}")
         # 3. authorities
         if f.mint_authority == "UNKNOWN":
             if k := unknown("mint_authority"):
@@ -135,7 +151,15 @@ class Filter:
         if h1 > self.cfg.max_h1_change_pct or c.liq_mcap_pct < self.cfg.min_liq_mcap_pct:
             # market-data kills need no on-chain calls
             return self.check(c, SafetyFacts(*([None] * 9)))
+        org_score = org_label = None
+        if self.jup is not None and self.cfg.min_organic_score > 0:
+            o = self.jup.organic(c.mint)  # one batched call per cycle; before any RPC/RugCheck spend
+            if o and o.get("score") is not None:
+                org_score, org_label = float(o["score"]), o.get("label")
+            if org_score is not None and org_score < self.cfg.min_organic_score:
+                return self.check(c, SafetyFacts(*([None] * 9), organic_score=org_score, organic_label=org_label))
         facts = self.gather(c)
+        facts.organic_score, facts.organic_label = org_score, org_label
         rep = self._cache.get(c.mint, (0, {}))[1]
         k = self.check(c, facts, rugged=bool(rep.get("rugged")))
         if k:

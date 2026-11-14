@@ -42,6 +42,24 @@ It is paper only: there is no live trading code in this version. It needs no thi
 | **risk** | Applies the same exits to both books: **stop −15%**, set before entry · **at +35%, sell 75%** · the remaining **25% trails 35% below its peak, never below entry** · **max hold 48h**. It also has a rug guard (exit if pool liquidity halves or the pool disappears), a cap of 5 open positions per book, and a 20% daily-drawdown halt per book. |
 | **logger** | Logs **every kill** (agent, book, reason code, detail, data), every handoff, fill, partial sell and stop move. Holds positions and per-book cash, so a restart resumes where it stopped. |
 
+## Profiles: why it trades (or doesn't)
+
+`DESK_PROFILE=active` is the default.
+- If a secondary data source (trench.bot bundles, creator rug history) is down or has no data for a coin, the coin is no longer killed.
+- The minimum score drops to 60.
+- Mint/freeze authority, LP lock, top-10 holders and dev holdings stay fail-closed in every profile.
+
+`DESK_PROFILE=strict` is the original spec: every unknown kills, and the minimum score is 70. Any `DESK_*` value you set yourself overrides the profile.
+
+If nothing gets bought:
+- Run `python -m memedesk doctor`. It tests every data source from your phone and tells you which failure blocks trading.
+- Check the **funnel** card on the dashboard. It shows, for the last hour, how many coins were scouted, passed the safety filter, scored high enough, and were bought, plus the most common kill reasons.
+
+## Extra filters and keys
+
+- **Jupiter organic score** (`JUP_API_KEY`, free at portal.jup.ag): Jupiter's 0–100 estimate of how much of a token's trading comes from real wallets rather than wash trading or bots. A token below 30 is killed. The check runs before the RugCheck/RPC calls, and one request scores the whole batch. If Jupiter has no score for a token, it isn't killed unless `DESK_ORGANIC_FAIL_CLOSED=true`.
+- **CoinGecko Demo** (`COINGECKO_API_KEY`): the free plan is capped at **10,000 calls a month**, which an always-on bot would use up within a day. So it's used only as a backup: when the public GeckoTerminal API returns 429, the same request goes to CoinGecko's onchain API instead. The monthly count is stored, the bot stops using the key at `DESK_COINGECKO_MONTHLY_CAP` (default 9,500), and the dashboard footer shows how much has been used.
+
 ## Does scoring beat luck?
 
 The dashboard and the report compare the two books: win rate, average and median return per trade, take-profit hits, and equity. They also run a Welch t-test on per-trade returns. Until each book has **20+ closed trades**, the verdict reads "too early". After that, a t-value above 2 means the score is adding edge over the filter alone. A t-value between −2 and 2 means it hasn't shown any edge yet.
@@ -83,6 +101,7 @@ python3 -m memedesk once          # one scan cycle, to check that data flows
 python -m memedesk report --hours 12   # both books + verdict; Grok writes a brief if XAI_API_KEY is set
 python -m memedesk positions
 python -m memedesk kills -n 100
+python -m memedesk doctor              # which data sources work from this device
 python -m memedesk dashboard           # dashboard over saved data, no trading
 sqlite3 data/desk_paper.db "select agent, book, reason, count(*) from kills group by 1,2,3 order by 4 desc"
 ```
@@ -104,4 +123,4 @@ sqlite3 data/desk_paper.db "select agent, book, reason, count(*) from kills grou
 pip install pytest && python -m pytest -q
 ```
 
-There are 47 offline tests. They cover every filter kill rule (including top-10 holders with the pool vault excluded), the 8% cap, the −15% stop, the +35% partial sell, the runner trailing stop and its floor at entry, the 48h max hold, the Random arm's matched draws from filter survivors, handoff enforcement, the comparison verdicts, the dashboard server, HTTP backoff and caching, a check that only the standard library is imported, and Whale Scout: winner detection, wallet scoring/exclusions/add-drop reasons, whale-mode signals going through Filter/Analyst/Risk, both transaction parsers, signature paging, and pump.fun bonding-curve derivation.
+There are 50 offline tests. They cover every filter kill rule (including top-10 holders with the pool vault excluded), the 8% cap, the −15% stop, the +35% partial sell, the runner trailing stop and its floor at entry, the 48h max hold, the Random arm's matched draws from filter survivors, handoff enforcement, the comparison verdicts, the dashboard server, HTTP backoff and caching, a check that only the standard library is imported, and Whale Scout: winner detection, wallet scoring/exclusions/add-drop reasons, whale-mode signals going through Filter/Analyst/Risk, both transaction parsers, signature paging, and pump.fun bonding-curve derivation.
