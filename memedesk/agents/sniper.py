@@ -66,6 +66,9 @@ class Sniper:
             if c.age_h * 60 > cfg.sniper_max_age_min:
                 self.track.pop(m, None)          # grown up: the main desk's watchlist takes over
                 continue
+            if c.age_h * 60 > 10 and c.mcap < cfg.sniper_min_mcap / 5:
+                self.track.pop(m, None)          # 10+ min old and still tiny: dead launch, stop polling it
+                continue
             out.append(c)
         # oldest-first eviction keeps the tracker bounded
         if len(self.track) > cfg.sniper_track_max * 2:

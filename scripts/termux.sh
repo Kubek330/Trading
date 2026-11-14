@@ -19,7 +19,13 @@ kill_all() {
     pkill -f "memedesk run" 2>/dev/null
   fi
   rm -f "$PID" data/py.pid
-  sleep 3
+  # wait for the old desk to finish shutting down (it holds the dashboard port until then)
+  for i in $(seq 1 30); do
+    pgrep -f "memedesk run" >/dev/null 2>&1 || break
+    sleep 1
+  done
+  pkill -9 -f "memedesk run" 2>/dev/null
+  sleep 1
 }
 
 case "${1:-start}" in

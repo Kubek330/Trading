@@ -97,7 +97,7 @@ class Logger:
         self.event(src, "handoff", mint, symbol, f"{src}->{dst}", detail, data, level=logging.DEBUG)
 
     # ---- kills & cooldowns -----------------------------------------------
-    def kill(self, k: Kill, default_cooldown_min: float) -> None:
+    def kill(self, k: Kill, default_cooldown_min: float, quiet: bool = False) -> None:
         cooldown = default_cooldown_min if k.cooldown_min is None else k.cooldown_min
         with self.lock:
             self.db.execute(
@@ -108,7 +108,8 @@ class Logger:
                                 (_ckey(k.mint, k.book), k.ts + cooldown * 60, k.agent, k.reason))
             self.db.commit()
         self.event(k.agent, "kill", k.mint, k.symbol, k.reason,
-                   (f"[{k.book}] " if k.book else "") + k.detail, k.data)
+                   (f"[{k.book}] " if k.book else "") + k.detail, k.data,
+                   level=logging.DEBUG if quiet else logging.INFO)
 
     def on_cooldown(self, mint: str, book: str | None = None) -> bool:
         with self.lock:

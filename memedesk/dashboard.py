@@ -182,6 +182,18 @@ def start_dashboard(desk) -> ThreadingHTTPServer | None:
     return srv
 
 
+def start_dashboard_retry(desk) -> None:
+    """Keep trying to bind (e.g. the previous desk process is still shutting down and holds the port)."""
+    if start_dashboard(desk):
+        return
+
+    def retry():
+        while not desk.stop_event.wait(5):
+            if start_dashboard(desk):
+                return
+    threading.Thread(target=retry, name="dashboard-retry", daemon=True).start()
+
+
 
 
 PAGE = r"""<!doctype html>

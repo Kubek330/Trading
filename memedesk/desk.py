@@ -238,7 +238,7 @@ class Desk:
             if k is SNIPER_SKIP:
                 continue
             if k:
-                self._kill(k)
+                self.logger.kill(k, self.cfg.kill_cooldown_min, quiet=True)   # in the DB, not on the console
                 out["sniper_skips"] = out.get("sniper_skips", 0) + 1
                 continue
             self.logger.handoff("sniper", "filter", c.mint, c.symbol)
@@ -407,8 +407,8 @@ class Desk:
         for sig in (signal.SIGINT, signal.SIGTERM):
             signal.signal(sig, lambda *_: self.stop_event.set())
         if self.cfg.dashboard:
-            from .dashboard import start_dashboard
-            start_dashboard(self)
+            from .dashboard import start_dashboard_retry
+            start_dashboard_retry(self)
         c = self.cfg
         banner = (f"memedesk PAPER up | books {c.books} ${c.paper_start_usd:,.0f} each | "
                   f"{c.position_pct:g}%/trade | stop -{c.stop_pct:g}% | +{c.tp_trigger_pct:g}% sell "
