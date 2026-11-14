@@ -123,6 +123,7 @@ def build_state(desk) -> dict:
                   "last_watch": desk.whale.last_watch, "winners_scanned": len(L.winners("scanned")),
                   "winners_pending": len(L.winners("pending"))},
         "last_cycle": desk.last_cycle, "http": desk.http.stats,
+        "limited_by_host": dict(sorted(getattr(desk.http, "limited_by_host", {}).items(), key=lambda kv: -kv[1])[:3]),
         "coingecko": {"enabled": bool(cfg.coingecko_api_key), "used": desk.cg_budget.used,
                       "cap": cfg.coingecko_monthly_cap},
         "rules": {"stop": cfg.stop_pct, "tp_trigger": cfg.tp_trigger_pct, "tp_sell": cfg.tp_sell_pct,
@@ -145,6 +146,12 @@ def start_dashboard(desk) -> ThreadingHTTPServer | None:
                 ctype = "application/json"
             elif path in ("/", "/index.html"):
                 body, ctype = PAGE.encode(), "text/html; charset=utf-8"
+            elif path == "/manifest.webmanifest":
+                from .icon import MANIFEST
+                body, ctype = json.dumps(MANIFEST).encode(), "application/manifest+json"
+            elif path in ("/icon-192.png", "/icon-512.png"):
+                from .icon import png
+                body, ctype = png(192 if "192" in path else 512), "image/png"
             else:
                 self.send_error(404)
                 return
@@ -175,6 +182,8 @@ PAGE = r"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#05070a">
+<link rel="manifest" href="/manifest.webmanifest"><link rel="icon" href="/icon-192.png">
+<link rel="apple-touch-icon" href="/icon-192.png"><meta name="mobile-web-app-capable" content="yes">
 <title>MemeDesk</title>
 <style>
 :root{--bg:#05070a;--panel:#0b0f14;--panel2:#11161d;--line:#1a2129;--ink:#e9eef3;--mute:#7d8a97;--dim:#3c4752;
@@ -307,7 +316,7 @@ footer{color:var(--dim);font-size:10px;margin-top:16px;line-height:1.7}
 <script>
 const $=id=>document.getElementById(id);
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-const money=v=>v==null?"–":(v<0?"−":"")+"$"+Math.abs(v).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+const money=v=>v==null?"–":(v<0?"−":"")+"$"+Math.abs(v).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
 const smoney=v=>v==null?"–":(v>=0?"+":"−")+"$"+Math.abs(v).toFixed(2);
 const short$=v=>(v>=0?"+":"−")+"$"+(Math.abs(v)>=10?Math.round(Math.abs(v)):Math.abs(v).toFixed(2));
 const pct=v=>v==null?"–":(v>=0?"+":"−")+Math.abs(v).toFixed(2)+"%";
@@ -402,7 +411,7 @@ async function tick(){
   $("rpcount").textContent=r.positions.length;$("rpos").innerHTML=positions(r.positions);$("rdec").innerHTML=decisions(S.decisions.filter(d=>d.book==="random"))}
  else $("verdict").textContent="Random control is off (DESK_RANDOM_CONTROL=false)";
  const R=S.rules,lc=S.last_cycle||{},o=lc.outcome||{};
- $("foot").innerHTML=`paper trading · ${R.size_pct}%/trade · stop −${R.stop}% · +${R.tp_trigger}% sells ${R.tp_sell}% · runner trails ${R.runner_trail}% (floor entry) · max ${R.max_hold_h}h<br>last scan ${ago(lc.ts)} ago · ${o.in_window??0} in window → ${o.vetted??0} vetted · http ${S.http.requests} req, ${S.http.rate_limited}×429, ${S.http.cache_hits} cached${S.coingecko.enabled?` · CoinGecko backup ${S.coingecko.used}/${S.coingecko.cap} this month`:""}`}
+ $("foot").innerHTML=`paper trading · ${R.size_pct}%/trade · stop −${R.stop}% · +${R.tp_trigger}% sells ${R.tp_sell}% · runner trails ${R.runner_trail}% (floor entry) · max ${R.max_hold_h}h<br>last scan ${ago(lc.ts)} ago · ${o.in_window??0} in window → ${o.vetted??0} vetted · http ${S.http.requests} req, ${S.http.rate_limited}×429${Object.keys(S.limited_by_host||{}).length?" ("+Object.entries(S.limited_by_host).map(([h,n])=>esc(h.replace("api.",""))+" "+n).join(", ")+")":""}, ${S.http.cache_hits} cached${S.coingecko.enabled?` · CoinGecko backup ${S.coingecko.used}/${S.coingecko.cap} this month`:""}`}
 setTab(tab);tick();setInterval(tick,5000);
 </script></body></html>
 """

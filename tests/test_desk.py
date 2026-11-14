@@ -486,3 +486,32 @@ def test_coingecko_backup_only_on_429_and_capped(tmp_path):
     with pytest.raises(DataError, match="429"):                      # no key: no backup, just the error
         GeckoTerminal(h2, "https://api.geckoterminal.com/api/v2").trades("pool4")
     assert all("coingecko.com" not in u for u in h2.urls)
+
+
+def test_pwa_manifest_and_icons(tmp_path):
+    import json
+    import urllib.request
+    from memedesk.dashboard import start_dashboard
+    d, _ = make_desk(tmp_path, dashboard_port=0)
+    srv = start_dashboard(d)
+    base = f"http://127.0.0.1:{srv.server_address[1]}"
+    m = json.loads(urllib.request.urlopen(base + "/manifest.webmanifest").read())
+    assert m["display"] == "standalone" and m["icons"][0]["src"] == "/icon-192.png"
+    png = urllib.request.urlopen(base + "/icon-192.png").read()
+    assert png[:8] == b"\x89PNG\r\n\x1a\n" and len(png) > 500
+    assert 'rel="manifest"' in urllib.request.urlopen(base + "/").read().decode()
+    srv.shutdown()
+
+
+def test_missing_trade_tape_defers_instead_of_scoring_zero(tmp_path):
+    from memedesk.http import DataError
+
+    class G429(FakeGecko):
+        def trades(self, pool, window_min=60):
+            raise DataError("GET api.geckoterminal.com failed after 4 tries: HTTP 429")
+
+    d, _ = make_desk(tmp_path, gecko=G429())
+    d.scan_cycle()
+    rows = d.logger.db.execute("SELECT reason FROM kills WHERE agent='analyst'").fetchall()
+    assert [r[0] for r in rows] == ["no_trade_data"]
+    assert d.logger.on_cooldown(GOOD, "scored") and not d.logger.on_cooldown(GOOD)

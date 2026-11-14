@@ -77,6 +77,12 @@ bash scripts/termux.sh start     # takes a wake lock, runs with auto-restart
 
 Open **http://127.0.0.1:8084** in the phone's browser. Use `bash scripts/termux.sh log` to follow the log and `bash scripts/termux.sh stop` to stop.
 
+**Make it feel like an app:**
+- **Home-screen icon:** with the desk running, open http://127.0.0.1:8084 in Chrome, then tap ⋮ → "Add to Home screen" / "Install app". MemeDesk opens full screen with its own icon.
+- **Start/Stop buttons:** install **Termux:Widget** from F-Droid and add its widget to your home screen. `setup` creates the MemeDesk-Start / Stop / Open / Update buttons it shows.
+- **Autostart after a reboot:** install **Termux:Boot** from F-Droid and open it once.
+- **Update:** `bash scripts/termux.sh update` stops the desk, runs `git pull` and starts it again.
+
 To keep it alive overnight: set Android Settings → Apps → Termux → Battery to **Unrestricted**, keep the phone charging, and leave the Termux notification in place (it holds the wake lock).
 
 **Public RPC friendliness.** Every host is paced per minute (Solana RPC at 40/min by default). A 429 response triggers exponential backoff with jitter, honours `Retry-After`, and pauses that host for every thread. Responses are cached:
@@ -123,4 +129,4 @@ sqlite3 data/desk_paper.db "select agent, book, reason, count(*) from kills grou
 pip install pytest && python -m pytest -q
 ```
 
-There are 50 offline tests. They cover every filter kill rule (including top-10 holders with the pool vault excluded), the 8% cap, the −15% stop, the +35% partial sell, the runner trailing stop and its floor at entry, the 48h max hold, the Random arm's matched draws from filter survivors, handoff enforcement, the comparison verdicts, the dashboard server, HTTP backoff and caching, a check that only the standard library is imported, and Whale Scout: winner detection, wallet scoring/exclusions/add-drop reasons, whale-mode signals going through Filter/Analyst/Risk, both transaction parsers, signature paging, and pump.fun bonding-curve derivation.
+There are 52 offline tests. They cover every filter kill rule (including top-10 holders with the pool vault excluded), the 8% cap, the −15% stop, the +35% partial sell, the runner trailing stop and its floor at entry, the 48h max hold, the Random arm's matched draws from filter survivors, handoff enforcement, the comparison verdicts, the dashboard server, HTTP backoff and caching, a check that only the standard library is imported, and Whale Scout: winner detection, wallet scoring/exclusions/add-drop reasons, whale-mode signals going through Filter/Analyst/Risk, both transaction parsers, signature paging, and pump.fun bonding-curve derivation.

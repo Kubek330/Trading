@@ -97,7 +97,7 @@ class Config:
     whale_interval_min: float = 30.0
     whale_min_multiple: float = 5.0          # 5x+ ...
     whale_lookback_d: float = 7.0            # ... within the last 7 days
-    whale_pools_per_run: int = 30            # OHLCV checks per run (GeckoTerminal is ~25/min)
+    whale_pools_per_run: int = 12            # OHLCV checks per run; GeckoTerminal is shared with Scout/Analyst
     whale_tokens_per_run: int = 0            # winners whose early buyers are read per run (0 = auto)
     whale_early_swaps: int = 0               # earliest swaps read per winner (0 = auto: 200 Helius / 80 public)
     whale_max_sig_pages: int = 0             # x1000 signatures walked back per winner (0 = auto)

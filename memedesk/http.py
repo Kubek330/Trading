@@ -46,6 +46,7 @@ class HttpClient:
         self._cache: dict[str, tuple[float, Any]] = {}
         self._lock = threading.Lock()
         self.stats = {"requests": 0, "errors": 0, "rate_limited": 0, "cache_hits": 0}
+        self.limited_by_host: dict[str, int] = {}
         self.stop_event = threading.Event()  # set on shutdown: aborts waits immediately
 
     def _sleep(self, secs: float) -> None:
@@ -99,6 +100,8 @@ class HttpClient:
             except urllib.error.HTTPError as e:
                 if e.code == 429 or e.code >= 500:
                     self.stats["rate_limited" if e.code == 429 else "errors"] += 1
+                    if e.code == 429:
+                        self.limited_by_host[host] = self.limited_by_host.get(host, 0) + 1
                     last = f"HTTP {e.code}"
                     self._backoff(host, attempt, e.headers.get("Retry-After"), penalize=e.code == 429)
                     continue
