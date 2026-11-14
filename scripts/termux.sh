@@ -4,6 +4,7 @@
 #   start:       bash scripts/termux.sh start     (dashboard: http://127.0.0.1:8084)
 #   stop:        bash scripts/termux.sh stop
 #   update:      bash scripts/termux.sh update    (stop -> git pull -> start)
+#   profile:     bash scripts/termux.sh fast      (or active / strict; restarts the desk)
 #   log:         bash scripts/termux.sh log
 set -u
 cd "$(dirname "$0")/.."
@@ -53,7 +54,7 @@ case "${1:-start}" in
         sleep 20
       done' > /dev/null 2>&1 &
     echo $! > "$PID"
-    echo "memedesk running ($(git log -1 --format=%h 2>/dev/null)). Dashboard: http://127.0.0.1:8084"
+    echo "memedesk running ($(git log -1 --format=%h 2>/dev/null), $(grep -m1 '^DESK_PROFILE=' .env 2>/dev/null || echo 'DESK_PROFILE=active')). Dashboard: http://127.0.0.1:8084"
     ;;
   stop)
     kill_all
@@ -65,8 +66,18 @@ case "${1:-start}" in
     git pull --ff-only && echo "updated to $(git log -1 --format='%h %s')"
     exec bash "$0" start
     ;;
+  fast|active|strict)
+    # switch profile and drop old .env lines that would override it
+    [ -f .env ] || cp .env.example .env
+    sed -i -e '/^DESK_PROFILE=/d' -e '/^DESK_MIN_SCORE=/d' -e '/^DESK_SCAN_INTERVAL_S=/d' \
+           -e '/^DESK_SCORE_KILL_COOLDOWN_MIN=/d' -e '/^DESK_MIN_LIQ_MCAP_PCT=/d' .env
+    echo "DESK_PROFILE=$1" >> .env
+    echo "profile set to $1"
+    kill_all
+    exec bash "$0" start
+    ;;
   log)
     tail -n 40 -f data/overnight.log
     ;;
-  *) echo "usage: $0 setup|start|stop|update|log"; exit 1 ;;
+  *) echo "usage: $0 setup|start|stop|update|fast|active|strict|log"; exit 1 ;;
 esac

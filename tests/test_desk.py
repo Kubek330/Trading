@@ -526,3 +526,20 @@ def test_fast_profile_buys_on_first_sighting(tmp_path, monkeypatch):
     d.logger.db.commit()
     d.scan_cycle()
     assert d.logger.positions("open", "scored")
+
+
+def test_too_young_coin_is_rechecked_when_it_matures(tmp_path):
+    young = pair(age_h=0.2)                                   # 12 minutes old
+    d, dex = make_desk(tmp_path, pairs=[young])
+    d.scan_cycle()
+    assert "too_young" in kills(d) and not d.logger.positions()
+    # it drops off the discovery feed, then turns 30m+ old
+    dex.discover_mints = lambda: []
+    dex.pairs[GOOD]["pairCreatedAt"] = int((time.time() - 2 * 3600) * 1000)
+    d.logger.db.execute("UPDATE watchlist SET next_check=0")
+    d.logger.db.execute("DELETE FROM cooldowns")
+    d.logger.db.commit()
+    out = d.scan_cycle()
+    assert out.get("scored_entered") == 1, kills(d)
+    src = d.logger.db.execute("SELECT data FROM events WHERE kind='scouted' ORDER BY ts DESC").fetchone()[0]
+    assert "watchlist" in src

@@ -77,6 +77,12 @@ class Scout:
 
     def run(self, skip=lambda mint: False) -> tuple[list[Candidate], list[Kill]]:
         found = {m: s for m, s in self.discover().items() if not skip(m)}
+        # watchlist: coins seen earlier (too young, too small, or already in the window) that are due a
+        # re-check. Discovery feeds mostly list brand-new launches, which drop off them before turning 30m.
+        if self.logger is not None:
+            for m in self.logger.watch_due(self.cfg.watch_recheck_per_cycle):
+                if not skip(m):
+                    found.setdefault(m, []).append("watchlist")
         if not found:
             return [], []
         try:
@@ -89,10 +95,23 @@ class Scout:
         for mint, pair in best.items():
             c = candidate_from_pair(pair, found[mint], now)
             k = self.gate(c)
+            self._update_watch(c, k, now)
             if k:
                 kills.append(k)
             else:
                 passed.append(c)
-        # freshest liquidity-rich pairs first; cap per cycle for rate limits
+        # most active first; cap per cycle for rate limits
         passed.sort(key=lambda c: (c.volume.get("h1", 0)), reverse=True)
         return passed[: self.cfg.scout_max_candidates], kills
+
+    def _update_watch(self, c: Candidate, k: Kill | None, now: float) -> None:
+        if self.logger is None or not c.mint:
+            return
+        if k is None:                                   # in window: look again next cycles while it stays there
+            self.logger.watch_set(c.mint, c.symbol, now + 300)
+        elif k.reason == "too_young":                   # come back the moment it turns 30m
+            self.logger.watch_set(c.mint, c.symbol, now + (k.cooldown_min or 1) * 60 + 5)
+        elif k.reason == "mcap_low":                    # may still grow into the window
+            self.logger.watch_set(c.mint, c.symbol, now + 900)
+        elif k.reason in ("too_old", "mcap_high", "bad_pair_data"):
+            self.logger.watch_drop(c.mint)

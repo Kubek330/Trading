@@ -116,7 +116,7 @@ def build_state(desk) -> dict:
         "profile": cfg.profile,
         "books": {b: _book_view(desk, b, now, curve) for b in cfg.books}, "compare": cmp,
         "curve": curve, "decisions": decisions, "ticker": ticker, "agents": agents,
-        "funnel": _funnel(L, now - 3600),
+        "funnel": {**_funnel(L, now - 3600), "watching": L.watch_count()},
         "wallets": [{"address": w["address"], "score": w["score"], "winners": len(w["winners"]),
                      "pnl_sol": w["pnl_sol"], "last_seen": w["last_seen"]} for w in tracked],
         "whale": {"backend": desk.chain.backend, "last_run": desk.whale.last_run,
@@ -396,7 +396,7 @@ async function tick(){
  $("stream").className="stream"+(alive?"":" off");$("stream").innerHTML=alive?'<span class="dot on"></span>streaming':'<span class="dot"></span>paused';
  $("dec").innerHTML=decisions(S.decisions.filter(d=>d.book==="scored"));
  const F=S.funnel,mx=Math.max(1,...F.reasons.map(r=>r.n));
- $("funnel").innerHTML=`<div class="funnel"><b>${F.scouted}</b> scouted <i>→</i> <b>${F.vetted}</b> safe <i>→</i> <b>${F.scored}</b> score ≥ ${S.rules.min_score} <i>→</i> <b>${F.bought}</b> bought</div>`
+ $("funnel").innerHTML=`<div class="funnel"><b>${F.scouted}</b> scouted <i>→</i> <b>${F.vetted}</b> safe <i>→</i> <b>${F.scored}</b> score ≥ ${S.rules.min_score} <i>→</i> <b>${F.bought}</b> bought</div><div class="mute" style="font-size:11px;margin:-4px 0 8px">${F.watching} coins on the watchlist, re-checked as they mature</div>`
   +(F.reasons.length?'<div class="mute" style="font-size:11px;margin-bottom:4px">most common kills</div>'+F.reasons.map(r=>`<div class="bar"><span class="l">${esc(r.agent)} · ${esc(r.reason)}</span><span class="tr"><span class="f" style="width:${(100*r.n/mx).toFixed(0)}%"></span></span><span class="k">${r.n}</span></div>`).join(""):'<div class="empty">no kills in the last hour</div>');
  const ST={ready:"✓ ready",working:"● working",error:"✕ error",off:"off"},flow=ORDER.filter(k=>S.agents[k]&&k!=="random");
  const card=(k,nx)=>{const a=S.agents[k];return`<div class="agent ${a.state}${nx?"":" end"}" id="ag-${k}" style="--c:var(--${k});--c2:var(--${nx||k})"><div class="tile">${bot(k,40)}</div>

@@ -69,6 +69,7 @@ class Config:
     min_mcap: float = 300_000.0
     max_mcap: float = 20_000_000.0
     scout_max_candidates: int = 40           # per cycle, after the age/mcap gate
+    watch_recheck_per_cycle: int = 150       # watchlist coins re-checked per scan (30 per DexScreener call)
     use_geckoterminal_discovery: bool = True
 
     # ---- filter -----------------------------------------------------------

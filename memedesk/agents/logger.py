@@ -32,6 +32,8 @@ CREATE TABLE IF NOT EXISTS positions (
 CREATE TABLE IF NOT EXISTS account (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS holders (mint TEXT, ts REAL, holders INTEGER);
 CREATE INDEX IF NOT EXISTS ix_holders ON holders(mint, ts);
+CREATE TABLE IF NOT EXISTS watchlist (mint TEXT PRIMARY KEY, symbol TEXT, first_seen REAL, next_check REAL);
+CREATE INDEX IF NOT EXISTS ix_watch_due ON watchlist(next_check);
 CREATE TABLE IF NOT EXISTS parsed_sigs (sig TEXT PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS swaps (
   sig TEXT, slot INTEGER, ts REAL, wallet TEXT, mint TEXT, d_token REAL, d_sol REAL,
@@ -118,6 +120,32 @@ class Logger:
             self.db.execute("INSERT OR REPLACE INTO cooldowns(key,until,agent,reason) VALUES(?,?,?,?)",
                             (_ckey(mint, book), time.time() + minutes * 60, agent, reason))
             self.db.commit()
+
+    # ---- scout watchlist ----------------------------------------------------
+    def watch_set(self, mint: str, symbol: str, next_check: float) -> None:
+        with self.lock:
+            self.db.execute("INSERT INTO watchlist(mint,symbol,first_seen,next_check) VALUES(?,?,?,?) "
+                            "ON CONFLICT(mint) DO UPDATE SET next_check=excluded.next_check, symbol=excluded.symbol",
+                            (mint, symbol, time.time(), next_check))
+            self.db.commit()
+
+    def watch_drop(self, mint: str) -> None:
+        with self.lock:
+            self.db.execute("DELETE FROM watchlist WHERE mint=?", (mint,))
+            self.db.commit()
+
+    def watch_due(self, limit: int, max_age_s: float = 72 * 3600) -> list[str]:
+        now = time.time()
+        with self.lock:
+            self.db.execute("DELETE FROM watchlist WHERE first_seen < ?", (now - max_age_s,))
+            rows = self.db.execute("SELECT mint FROM watchlist WHERE next_check <= ? ORDER BY next_check LIMIT ?",
+                                   (now, limit)).fetchall()
+            self.db.commit()
+        return [r[0] for r in rows]
+
+    def watch_count(self) -> int:
+        with self.lock:
+            return self.db.execute("SELECT COUNT(*) FROM watchlist").fetchone()[0]
 
     # ---- holder snapshots -------------------------------------------------
     def holder_snapshot(self, mint: str, holders: int) -> None:
