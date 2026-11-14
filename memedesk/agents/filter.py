@@ -78,7 +78,7 @@ class Filter:
         def unknown(what: str) -> Kill | None:
             # "active" profile: a secondary data source being down doesn't block every trade.
             # Authorities, LP, top-10 and dev holdings stay fail-closed in every profile.
-            if what in SOFT_CHECKS and cfg.profile == "active":
+            if what in SOFT_CHECKS and cfg.profile in ("active", "fast"):
                 return None
             return kill(f"unknown_{what}", f"{what} unavailable (fail-closed)") if cfg.fail_closed else None
 

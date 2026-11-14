@@ -31,6 +31,10 @@ from pathlib import Path
 PROFILES = {
     "strict": {"min_score": 70.0},
     "active": {"min_score": 60.0},
+    # fast: like active, but buys sooner: no 10-min wait for holder growth on first sighting,
+    # score >= 55, scans every 60s, rejected coins re-checked after 3 min. Safety filters unchanged.
+    "fast": {"min_score": 55.0, "scan_interval_s": 60.0, "score_kill_cooldown_min": 3.0,
+             "holder_growth_optional": True},
 }
 
 # Hard ceiling that config cannot raise. Executor and risk enforce it independently.
@@ -87,6 +91,7 @@ class Config:
     w_liq_mcap: float = 15.0
     w_smart_wallets: float = 15.0
     smart_wallets_file: str = "smart_wallets.txt"
+    holder_growth_optional: bool = False     # True: unmeasured holder growth drops out of the score instead of scoring 0
 
     # ---- random control ---------------------------------------------------
     random_control: bool = True              # run the luck baseline alongside

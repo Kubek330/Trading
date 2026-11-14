@@ -49,6 +49,12 @@ It is paper only: there is no live trading code in this version. It needs no thi
 - The minimum score drops to 60.
 - Mint/freeze authority, LP lock, top-10 holders and dev holdings stay fail-closed in every profile.
 
+`DESK_PROFILE=fast` (set in `.env.example`) is like active, but buys sooner:
+- It doesn't wait 10 minutes to measure holder growth; a coin seen for the first time is scored on the other factors.
+- The minimum score is 55.
+- It scans every 60 s, and rejected coins are re-checked after 3 minutes.
+- The safety filters are the same as in active.
+
 `DESK_PROFILE=strict` is the original spec: every unknown kills, and the minimum score is 70. Any `DESK_*` value you set yourself overrides the profile.
 
 If nothing gets bought:

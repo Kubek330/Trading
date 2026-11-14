@@ -515,3 +515,14 @@ def test_missing_trade_tape_defers_instead_of_scoring_zero(tmp_path):
     rows = d.logger.db.execute("SELECT reason FROM kills WHERE agent='analyst'").fetchall()
     assert [r[0] for r in rows] == ["no_trade_data"]
     assert d.logger.on_cooldown(GOOD, "scored") and not d.logger.on_cooldown(GOOD)
+
+
+def test_fast_profile_buys_on_first_sighting(tmp_path, monkeypatch):
+    monkeypatch.setenv("DESK_PROFILE", "fast")
+    c = Config.load(tmp_path / "none.env")
+    assert (c.min_score, c.scan_interval_s, c.holder_growth_optional) == (55, 60, True)
+    d, _ = make_desk(tmp_path, profile="fast", min_score=55, holder_growth_optional=True)
+    d.logger.db.execute("DELETE FROM holders")            # first sighting: no growth history at all
+    d.logger.db.commit()
+    d.scan_cycle()
+    assert d.logger.positions("open", "scored")

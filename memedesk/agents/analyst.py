@@ -152,6 +152,8 @@ class Analyst:
         weights = dict(self.cfg.score_weights)
         if not smart:
             weights.pop("smart_wallets")
+        if growth is None and self.cfg.holder_growth_optional:
+            weights.pop("holder_growth")   # not measured yet: judged on the other factors
         total_w = sum(weights.values())
         score = sum(comps[k] * w for k, w in weights.items()) / total_w
         comps = {k: round(val, 1) for k, val in comps.items()}
