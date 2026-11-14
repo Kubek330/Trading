@@ -150,7 +150,8 @@ class Analyst:
             "smart_wallets": score_smart_wallets(smart_hits),
         }
         weights = dict(self.cfg.score_weights)
-        if not smart:
+        if not smart_hits:
+            # bonus-only: a coin none of our (few) tracked wallets touched isn't negative evidence
             weights.pop("smart_wallets")
         if growth is None and self.cfg.holder_growth_optional:
             weights.pop("holder_growth")   # not measured yet: judged on the other factors

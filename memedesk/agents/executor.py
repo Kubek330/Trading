@@ -15,6 +15,11 @@ from ..models import (HandoffError, Kill, OrderTicket, Position, RandomPick, Ris
 log = logging.getLogger("memedesk.executor")
 
 TICKET_TTL_S = 60.0
+
+
+def _curve_dexes():
+    from .filter import BONDING_CURVE_DEXES
+    return BONDING_CURVE_DEXES
 UPSTREAM = {"scored": "analyst", "random": "random", "sniper": "sniper"}
 
 
@@ -49,6 +54,9 @@ class Executor:
             return kill("pumped_1h", f"+{h1:.0f}% in 1h at requote", cooldown=60)
 
         pct = min(self.cfg.rules(book).position_pct, HARD_MAX_POSITION_PCT)
+        from .filter import BONDING_CURVE_DEXES, curve_liq_estimate
+        if (q["pair"].get("dexId") or "").lower() in BONDING_CURVE_DEXES:
+            liq = max(liq, curve_liq_estimate(float(q.get("mcap") or c.mcap or 0)))
         size = min(equity_usd * pct / 100, liq * self.cfg.max_pool_impact_pct / 100, cash_usd)
         if size < self.cfg.min_trade_usd:
             return kill("size_too_small", f"size ${size:.2f} (cash ${cash_usd:.2f}, liq ${liq:,.0f})", cooldown=5)
@@ -72,7 +80,9 @@ class Executor:
             id=uuid.uuid4().hex[:12], book=t.book, mint=c.mint, symbol=c.symbol,
             pair_address=c.pair_address, entry_price=fill.price, initial_qty=fill.qty, qty=fill.qty,
             cost_usd=fill.usd, stop_price=fill.price * (1 - a.stop_pct / 100),
-            peak_price=fill.price, entry_liq_usd=c.liquidity_usd, score=t.pick.score,
+            peak_price=fill.price, score=t.pick.score,
+            # curve coins: DexScreener shows ~$0 liquidity, so the liq-crash guard can't be used on them
+            entry_liq_usd=0.0 if (c.dex_id or "").lower() in _curve_dexes() else c.liquidity_usd,
             opened_ts=time.time(), last_price=fill.price,
             creator=t.pick.vetted.facts.creator or "",
         )

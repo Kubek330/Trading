@@ -25,6 +25,7 @@ from .agents.logger import Logger
 from .agents.random_control import RandomControl
 from .agents.risk import Risk
 from .agents.scout import Scout
+from .agents.sniper import SKIP as SNIPER_SKIP
 from .agents.sniper import Sniper
 from .agents.whale_scout import WhaleScout
 from .broker.paper import PaperBroker
@@ -234,6 +235,8 @@ class Desk:
             if self._blocked(c.mint, "sniper"):
                 continue
             k = self.sniper.prefilter(c)
+            if k is SNIPER_SKIP:
+                continue
             if k:
                 self._kill(k)
                 out["sniper_skips"] = out.get("sniper_skips", 0) + 1

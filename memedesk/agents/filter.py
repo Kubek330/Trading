@@ -25,6 +25,12 @@ def on_bonding_curve(c: Candidate) -> bool:
     return (c.dex_id or "").lower() in BONDING_CURVE_DEXES
 
 
+def curve_liq_estimate(mcap: float) -> float:
+    """DexScreener reports ~$0 liquidity for launchpad curves; their real SOL reserves are roughly
+    10%+ of market cap. Used only to cap paper size, never to pass a safety check."""
+    return 0.10 * mcap
+
+
 class Filter:
     name = "filter"
 
@@ -107,8 +113,8 @@ class Filter:
         if h1 > cfg.max_h1_change_pct:
             return Kill(self.name, c.mint, c.symbol, "pumped_1h",
                         f"+{h1:.0f}% in 1h > {cfg.max_h1_change_pct:.0f}%", cooldown_min=60)
-        # 2. liquidity depth versus mcap
-        if c.liq_mcap_pct < cfg.min_liq_mcap_pct:
+        # 2. liquidity depth versus mcap (DexScreener can't see bonding-curve reserves)
+        if not on_bonding_curve(c) and c.liq_mcap_pct < cfg.min_liq_mcap_pct:
             return kill("liq_thin", f"liq/mcap {c.liq_mcap_pct:.1f}% < {cfg.min_liq_mcap_pct:.0f}%")
         if rugged:
             return kill("rugged", "RugCheck marks token as rugged")
@@ -170,7 +176,7 @@ class Filter:
     def run(self, c: Candidate) -> Vetted | Kill:
         require_stage(c, ("scout", "whale_scout"), self.name)
         h1 = c.price_change.get("h1", 0.0)
-        if h1 > self.cfg.max_h1_change_pct or c.liq_mcap_pct < self.cfg.min_liq_mcap_pct:
+        if h1 > self.cfg.max_h1_change_pct or (not on_bonding_curve(c) and c.liq_mcap_pct < self.cfg.min_liq_mcap_pct):
             # market-data kills need no on-chain calls
             return self.check(c, SafetyFacts(*([None] * 9)))
         org_score = org_label = None

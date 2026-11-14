@@ -613,3 +613,28 @@ def test_stablecoins_ignored(tmp_path):
     d, _ = make_desk(tmp_path, pairs=[pair(sym="USDTw")])
     d.scan_cycle()
     assert "stablecoin" in kills(d) and not d.logger.positions()
+
+
+def test_sniper_trades_bonding_curve_coin_with_zero_reported_liquidity(tmp_path):
+    yp = young_pair()
+    yp["dexId"], yp["liquidity"]["usd"] = "pumpfun", 3          # DexScreener's view of a curve
+    rep = report(markets=[], topHolders=[{"address": f"h{i}", "owner": f"o{i}", "pct": 1.0} for i in range(12)])
+    d, dex = make_desk(tmp_path, pairs=[yp], rep=rep, sniper_min_liq=5000)
+    out = d.scan_cycle()
+    assert out.get("sniper_entered") == 1, kills(d)
+    [p] = d.logger.positions("open", "sniper")
+    assert p.cost_usd == pytest.approx(40.0) and p.entry_liq_usd == 0
+    dex.set_price(yp["baseToken"]["address"], 0.00099, liq=0)    # still ~$0 reported: no fake liq-crash exit
+    d.risk.monitor(d.executor, threading.RLock())
+    assert d.logger.positions("open", "sniper")
+
+
+def test_smart_wallets_are_bonus_only(tmp_path):
+    from memedesk.agents.analyst import Analyst
+    d, _ = make_desk(tmp_path)
+    c, _ = d.scout.run()
+    v = d.filter.run(c[0])
+    with_hit = d.analyst.run(v).score                            # SmartA/SmartB present in the fixture
+    d.analyst._fixed = {"SomeoneElse"}
+    no_hit = Analyst.run(d.analyst, v).score
+    assert no_hit >= 60 and with_hit >= no_hit - 15             # absence no longer drags the score to ~0 on that weight

@@ -35,6 +35,9 @@ def momentum_score(c: Candidate) -> float:
     return round(100 * (0.4 * min(1.0, (ratio - 1) / 1.5) + 0.3 * act + 0.3 * min(1.0, max(0.0, m5) / 25)), 1)
 
 
+SKIP = Kill("sniper", "", "", "wait", "")   # sentinel: skip silently, don't log
+
+
 class Sniper:
     name = "sniper"
     book = "sniper"
@@ -79,10 +82,11 @@ class Sniper:
 
         age_min = c.age_h * 60
         if age_min < cfg.sniper_min_age_min:
-            return kill("too_fresh", f"age {age_min:.1f}m < {cfg.sniper_min_age_min:g}m", 1)
+            return SKIP                                  # not a kill: just too early, look again next scan
         if not cfg.sniper_min_mcap <= c.mcap <= cfg.sniper_max_mcap:
             return kill("mcap_out", f"mcap ${c.mcap:,.0f}", 3)
-        if c.liquidity_usd < cfg.sniper_min_liq:
+        from .filter import on_bonding_curve
+        if not on_bonding_curve(c) and c.liquidity_usd < cfg.sniper_min_liq:
             return kill("liq_low", f"liq ${c.liquidity_usd:,.0f} < ${cfg.sniper_min_liq:,.0f}", 3)
         tx = c.txns.get("m5", {})
         b, s = tx.get("buys", 0), tx.get("sells", 0)
@@ -90,7 +94,7 @@ class Sniper:
             return kill("quiet", f"{b + s} txns in 5m < {cfg.sniper_min_txns_m5}")
         ratio = b / s if s else float("inf")
         if ratio < cfg.sniper_min_buy_sell_m5:
-            return kill("sellers", f"buy/sell 5m {ratio:.2f} < {cfg.sniper_min_buy_sell_m5:g}")
+            return kill("sellers", f"buy/sell 5m {ratio:.3f} < {cfg.sniper_min_buy_sell_m5:g}")
         m5 = c.price_change.get("m5", 0.0)
         if m5 > cfg.sniper_max_m5_pct:
             return kill("vertical", f"+{m5:.0f}% in 5m > {cfg.sniper_max_m5_pct:g}%")

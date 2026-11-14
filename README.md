@@ -53,7 +53,8 @@ It is paper only: there is no live trading code in this version. It needs no thi
 - It doesn't wait 10 minutes to measure holder growth; a coin seen for the first time is scored on the other factors.
 - The minimum score is 55.
 - It scans every 60 s, and rejected coins are re-checked after 3 minutes.
-- The safety filters are the same as in active.
+- The safety filters are the same as in active, except that the liquidity/mcap floor is 3%.
+- The sniper entry gate is looser: mcap ≥ $15k, ≥ 15 trades in 5 min, buy/sell ≥ 1.2, skips coins up more than 100% in 5 min.
 
 `DESK_PROFILE=strict` is the original spec: every unknown kills, and the minimum score is 70. Any `DESK_*` value you set yourself overrides the profile.
 
@@ -145,4 +146,4 @@ sqlite3 data/desk_paper.db "select agent, book, reason, count(*) from kills grou
 pip install pytest && python -m pytest -q
 ```
 
-There are 59 offline tests. They cover every filter kill rule (including top-10 holders with the pool vault excluded), the 8% cap, the −15% stop, the +35% partial sell, the runner trailing stop and its floor at entry, the 48h max hold, the Random arm's matched draws from filter survivors, handoff enforcement, the comparison verdicts, the dashboard server, HTTP backoff and caching, a check that only the standard library is imported, and Whale Scout: winner detection, wallet scoring/exclusions/add-drop reasons, whale-mode signals going through Filter/Analyst/Risk, both transaction parsers, signature paging, and pump.fun bonding-curve derivation.
+There are 61 offline tests. They cover every filter kill rule (including top-10 holders with the pool vault excluded), the 8% cap, the −15% stop, the +35% partial sell, the runner trailing stop and its floor at entry, the 48h max hold, the Random arm's matched draws from filter survivors, handoff enforcement, the comparison verdicts, the dashboard server, HTTP backoff and caching, a check that only the standard library is imported, and Whale Scout: winner detection, wallet scoring/exclusions/add-drop reasons, whale-mode signals going through Filter/Analyst/Risk, both transaction parsers, signature paging, and pump.fun bonding-curve derivation.
