@@ -9,10 +9,20 @@ from ..config import Config
 from ..http import DataError
 from ..models import Candidate, Kill, SafetyFacts, Vetted, require_stage
 from ..sources import rugcheck as rc
+from ..sources.solana_util import looks_like_pump_mint, pump_bonding_curve
 
 log = logging.getLogger("memedesk.filter")
 
 SOFT_CHECKS = {"bundle", "dev_history"}
+
+# Launchpad bonding curves (DexScreener dexId). Before graduation there is no LP at all: the curve's
+# reserves are held by the launchpad program and can't be pulled, so the LP-lock rule doesn't apply,
+# and the curve account itself must not count as a "top holder".
+BONDING_CURVE_DEXES = {"pumpfun", "pump.fun", "moonshot", "launchlab", "raydium-launchlab", "boop", "believe"}
+
+
+def on_bonding_curve(c: Candidate) -> bool:
+    return (c.dex_id or "").lower() in BONDING_CURVE_DEXES
 
 
 class Filter:
@@ -39,6 +49,16 @@ class Filter:
             self.logger.holder_snapshot(mint, int(holders))  # only on fresh data
         return rep
 
+    @staticmethod
+    def _curve_accounts(c: Candidate) -> set[str]:
+        out = {c.pair_address} if on_bonding_curve(c) else set()
+        if looks_like_pump_mint(c.mint):
+            try:
+                out.add(pump_bonding_curve(c.mint))
+            except ValueError:
+                pass
+        return out
+
     def gather(self, c: Candidate) -> SafetyFacts:
         rep = self._report(c.mint)
         mint_auth = freeze_auth = "UNKNOWN"
@@ -63,7 +83,7 @@ class Filter:
             bundle_pct=bundle_pct,
             bundle_source=bundle_src,
             holders=int(holders) if isinstance(holders, (int, float)) else None,
-            top10_pct=rc.top10_pct(rep) if rep else None,
+            top10_pct=rc.top10_pct(rep, self._curve_accounts(c)) if rep else None,
             top_holder_owners=rc.holder_owners(rep) if rep else [],
             rugcheck_score=(rep or {}).get("score_normalised"),
         )
@@ -112,8 +132,10 @@ class Filter:
                 return k
         elif f.freeze_authority:
             return kill("freeze_authority_live", f"freeze authority {f.freeze_authority[:8]}… not revoked")
-        # 4. LP burned or locked
-        if f.lp_locked_pct is None:
+        # 4. LP burned or locked (not applicable on a launchpad bonding curve: no LP exists yet)
+        if on_bonding_curve(c):
+            pass
+        elif f.lp_locked_pct is None:
             if k := unknown("lp_lock"):
                 return k
         elif f.lp_locked_pct < cfg.min_lp_locked_pct:

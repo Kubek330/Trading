@@ -11,6 +11,9 @@ from ..sources.dexscreener import DexScreener, _f
 
 log = logging.getLogger("memedesk.scout")
 
+STABLE_MINTS = {"EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
+                "So11111111111111111111111111111111111111112"}
+
 
 def candidate_from_pair(p: dict, sources: list[str], now: float | None = None) -> Candidate:
     base = p.get("baseToken") or {}
@@ -60,6 +63,8 @@ class Scout:
 
     def gate(self, c: Candidate) -> Kill | None:
         cfg = self.cfg
+        if "USD" in (c.symbol or "").upper() or c.mint in STABLE_MINTS:
+            return Kill(self.name, c.mint, c.symbol, "stablecoin", "stable/wrapped dollar token", cooldown_min=7 * 24 * 60)
         if not c.mint or not c.pair_created_ms or c.price_usd <= 0:
             return Kill(self.name, c.mint, c.symbol, "bad_pair_data", "missing price/age")
         age_min = c.age_h * 60
@@ -117,5 +122,5 @@ class Scout:
             self.logger.watch_set(c.mint, c.symbol, now + (k.cooldown_min or 1) * 60 + 5)
         elif k.reason == "mcap_low":                    # may still grow into the window
             self.logger.watch_set(c.mint, c.symbol, now + 900)
-        elif k.reason in ("too_old", "mcap_high", "bad_pair_data"):
+        elif k.reason in ("too_old", "mcap_high", "bad_pair_data", "stablecoin"):
             self.logger.watch_drop(c.mint)

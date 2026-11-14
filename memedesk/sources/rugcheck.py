@@ -100,12 +100,12 @@ def _pool_accounts(report: dict) -> set[str]:
     return out
 
 
-def top10_pct(report: dict) -> float | None:
-    """% of supply held by the 10 largest holders, excluding pool/AMM accounts."""
+def top10_pct(report: dict, extra_pools: set[str] | None = None) -> float | None:
+    """% of supply held by the 10 largest holders, excluding pool/AMM/bonding-curve accounts."""
     holders = report.get("topHolders")
     if not holders:
         return None
-    pools = _pool_accounts(report)
+    pools = _pool_accounts(report) | (extra_pools or set())
     people = [h for h in holders
               if h.get("address") not in pools and h.get("owner") not in pools]
     pcts = sorted((_num(h.get("pct")) or 0.0 for h in people), reverse=True)

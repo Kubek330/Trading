@@ -67,8 +67,9 @@ def _funnel(L, since: float) -> dict:
         scored = q("SELECT COUNT(DISTINCT mint) FROM events WHERE kind='pass' AND agent='analyst' AND ts>=?")
         bought = q("SELECT COUNT(*) FROM events WHERE kind='decision' AND reason='BUY' AND ts>=? "
                    "AND data LIKE '%\"book\":\"scored\"%'")
-        reasons = L.db.execute("SELECT agent, reason, COUNT(*) n FROM kills WHERE ts>=? AND agent!='scout' "
-                               "GROUP BY agent, reason ORDER BY n DESC LIMIT 6", (since,)).fetchall()
+        reasons = L.db.execute("SELECT agent || CASE WHEN book='' THEN '' ELSE ' [' || book || ']' END, reason, COUNT(*) n "
+                               "FROM kills WHERE ts>=? AND agent!='scout' "
+                               "GROUP BY 1, reason ORDER BY n DESC LIMIT 8", (since,)).fetchall()
     return {"scouted": scouted, "vetted": vetted, "scored": scored, "bought": bought,
             "reasons": [{"agent": a, "reason": r, "n": n} for a, r, n in reasons]}
 

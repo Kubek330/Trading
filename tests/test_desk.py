@@ -589,3 +589,27 @@ def test_sniper_exit_rules():
     p.opened_ts = time.time() - 7 * 3600
     assert step(p, 1.2, None, time.time(), r)[0][2] == "max_hold"      # 6h max for snipes
     assert cfg.rules("scored") is cfg
+
+
+def test_sniper_bonding_curve_coin_not_killed_for_missing_lp_or_curve_holdings(tmp_path):
+    yp = young_pair()
+    yp["dexId"] = "pumpfun"                                           # still on the pump.fun bonding curve
+    rep = report(markets=[], topHolders=[{"address": "curveATA", "owner": yp["pairAddress"], "pct": 72.0}]
+                 + [{"address": f"h{i}", "owner": f"o{i}", "pct": 1.0} for i in range(12)])
+    d, _ = make_desk(tmp_path, pairs=[yp], rep=rep)
+    out = d.scan_cycle()
+    assert out.get("sniper_entered") == 1, kills(d)
+    assert not {"lp_unlocked", "unknown_lp_lock", "top10_heavy"} & set(kills(d))
+    # a real wallet holding 72% is still a kill
+    yp2 = young_pair()
+    whale = [{"address": "w1", "owner": "SomeWallet", "pct": 72.0}] + rep["topHolders"][1:]
+    d2, _ = make_desk(tmp_path / "b", pairs=[yp2], rep=report(markets=[{"pubkey": yp2["pairAddress"], "lp": {"lpLockedPct": 100}}],
+                                                             topHolders=whale))
+    d2.scan_cycle()
+    assert "top10_heavy" in kills(d2, "sniper")
+
+
+def test_stablecoins_ignored(tmp_path):
+    d, _ = make_desk(tmp_path, pairs=[pair(sym="USDTw")])
+    d.scan_cycle()
+    assert "stablecoin" in kills(d) and not d.logger.positions()

@@ -7,6 +7,7 @@
   python -m memedesk positions   # open + recent positions, both books
   python -m memedesk kills       # most recent kills with reasons
   python -m memedesk doctor      # test every data source from this device
+  python -m memedesk why         # why nothing gets bought: top kill reasons per book (last --hours, default 1)
 """
 from __future__ import annotations
 
@@ -21,9 +22,9 @@ from .config import Config
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="memedesk")
-    ap.add_argument("cmd", choices=["run", "once", "dashboard", "report", "positions", "kills", "doctor"])
+    ap.add_argument("cmd", choices=["run", "once", "dashboard", "report", "positions", "kills", "doctor", "why"])
     ap.add_argument("--env", default=".env")
-    ap.add_argument("--hours", type=float, default=12.0)
+    ap.add_argument("--hours", type=float, default=None)
     ap.add_argument("-n", type=int, default=40)
     ap.add_argument("-v", "--verbose", action="store_true", help="also log every handoff")
     args = ap.parse_args(argv)
@@ -35,6 +36,28 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "doctor":
         from .doctor import run as doctor
         return doctor(cfg)
+
+    if args.cmd == "why":
+        from .agents.logger import Logger
+        lg = Logger(cfg.data_dir)
+        since = time.time() - (args.hours or 1) * 3600
+        q = lambda sql, *a: lg.db.execute(sql, (since, *a)).fetchall()  # noqa: E731
+        print(f"last {args.hours or 1:g}h · profile {cfg.profile} · min score {cfg.min_score:g}\n")
+        scouted = q("SELECT COUNT(DISTINCT mint) FROM events WHERE kind='scouted' AND ts>=?")[0][0]
+        print(f"scout: {scouted} coins in the 30m-72h window, watchlist {lg.watch_count()}")
+        for book, label in (("", "main desk filter (shared)"), ("scored", "analyst / scored book"),
+                            ("random", "random book"), ("sniper", "sniper book")):
+            rows = q("SELECT agent, reason, COUNT(*) n, MAX(detail) FROM kills WHERE ts>=? AND book=? "
+                     "AND agent!='scout' GROUP BY agent, reason ORDER BY n DESC LIMIT 6", book)
+            buys = q("SELECT COUNT(*) FROM events WHERE kind='decision' AND reason='BUY' AND ts>=? "
+                     "AND data LIKE ?", f'%"book":"{book}"%')[0][0] if book else None
+            head = label + (f" · {buys} bought" if buys is not None else "")
+            print(f"\n{head}")
+            if not rows:
+                print("   (no kills)")
+            for agent, reason, n, detail in rows:
+                print(f"  {n:5}  {agent:8} {reason:22} e.g. {str(detail)[:60]}")
+        return 0
 
     if args.cmd in ("positions", "kills"):
         from .agents.logger import Logger
@@ -70,7 +93,7 @@ def main(argv: list[str] | None = None) -> int:
             except KeyboardInterrupt:
                 pass
     elif args.cmd == "report":
-        print(desk.report(time.time() - args.hours * 3600))
+        print(desk.report(time.time() - (args.hours or 12) * 3600))
     return 0
 
 
