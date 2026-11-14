@@ -41,6 +41,7 @@ class Scout:
 
     def __init__(self, cfg: Config, dex: DexScreener, gecko=None, logger=None):
         self.cfg, self.dex, self.gecko, self.logger = cfg, dex, gecko, logger
+        self.young: list[Candidate] = []
 
     def discover(self) -> dict[str, list[str]]:
         found: dict[str, list[str]] = {}
@@ -92,10 +93,13 @@ class Scout:
             return [], []
         now = time.time()
         passed, kills = [], []
+        self.young = []                                  # too-young coins: the sniper's hunting ground
         for mint, pair in best.items():
             c = candidate_from_pair(pair, found[mint], now)
             k = self.gate(c)
             self._update_watch(c, k, now)
+            if k and k.reason == "too_young":
+                self.young.append(c)
             if k:
                 kills.append(k)
             else:

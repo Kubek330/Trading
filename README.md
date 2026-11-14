@@ -66,6 +66,15 @@ If nothing gets bought:
 - **Jupiter organic score** (`JUP_API_KEY`, free at portal.jup.ag): Jupiter's 0–100 estimate of how much of a token's trading comes from real wallets rather than wash trading or bots. A token below 30 is killed. The check runs before the RugCheck/RPC calls, and one request scores the whole batch. If Jupiter has no score for a token, it isn't killed unless `DESK_ORGANIC_FAIL_CLOSED=true`.
 - **CoinGecko Demo** (`COINGECKO_API_KEY`): the free plan is capped at **10,000 calls a month**, which an always-on bot would use up within a day. So it's used only as a backup: when the public GeckoTerminal API returns 429, the same request goes to CoinGecko's onchain API instead. The monthly count is stored, the bot stops using the key at `DESK_COINGECKO_MONTHLY_CAP` (default 9,500), and the dashboard footer shows how much has been used.
 
+## Sniper (separate experiment)
+
+The sniper hunts **brand-new coins, 3–30 minutes old**: the ones the main desk rejects as too young. It trades its own $1000 paper book, shown on the **Sniper** tab, so its results never mix with the scored or random books.
+- **Tracking:** every young coin Scout sees is re-checked each scan until it turns 30 min old.
+- **Entry gate:** mcap $30k–$3M, liquidity ≥ $10k, ≥ 20 trades in the last 5 min, buyers ≥ 1.3× sellers. It skips a coin that is falling, and one that is already up more than 60% in 5 min.
+- **Safety:** the same on-chain checks as the main filter, with thresholds for new coins: top-10 ≤ 30%, dev ≤ 5%, bundle ≤ 15%. There is no 1-hour pump rule, since these coins are only minutes old.
+- **Exits:** 4% per trade, stop −20%, at +50% sell 75%, the runner trails 30% below its peak (never below entry), max hold 6 h.
+- **Turning it off:** set `DESK_SNIPER=false`. Every threshold is a `DESK_SNIPER_*` setting.
+
 ## Does scoring beat luck?
 
 The dashboard and the report compare the two books: win rate, average and median return per trade, take-profit hits, and equity. They also run a Welch t-test on per-trade returns. Until each book has **20+ closed trades**, the verdict reads "too early". After that, a t-value above 2 means the score is adding edge over the filter alone. A t-value between −2 and 2 means it hasn't shown any edge yet.
@@ -135,4 +144,4 @@ sqlite3 data/desk_paper.db "select agent, book, reason, count(*) from kills grou
 pip install pytest && python -m pytest -q
 ```
 
-There are 52 offline tests. They cover every filter kill rule (including top-10 holders with the pool vault excluded), the 8% cap, the −15% stop, the +35% partial sell, the runner trailing stop and its floor at entry, the 48h max hold, the Random arm's matched draws from filter survivors, handoff enforcement, the comparison verdicts, the dashboard server, HTTP backoff and caching, a check that only the standard library is imported, and Whale Scout: winner detection, wallet scoring/exclusions/add-drop reasons, whale-mode signals going through Filter/Analyst/Risk, both transaction parsers, signature paging, and pump.fun bonding-curve derivation.
+There are 57 offline tests. They cover every filter kill rule (including top-10 holders with the pool vault excluded), the 8% cap, the −15% stop, the +35% partial sell, the runner trailing stop and its floor at entry, the 48h max hold, the Random arm's matched draws from filter survivors, handoff enforcement, the comparison verdicts, the dashboard server, HTTP backoff and caching, a check that only the standard library is imported, and Whale Scout: winner detection, wallet scoring/exclusions/add-drop reasons, whale-mode signals going through Filter/Analyst/Risk, both transaction parsers, signature paging, and pump.fun bonding-curve derivation.

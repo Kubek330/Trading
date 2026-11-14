@@ -16,6 +16,7 @@ import signal
 import threading
 import time
 from contextlib import contextmanager
+from dataclasses import replace
 
 from .agents.analyst import Analyst
 from .agents.executor import Executor
@@ -24,6 +25,7 @@ from .agents.logger import Logger
 from .agents.random_control import RandomControl
 from .agents.risk import Risk
 from .agents.scout import Scout
+from .agents.sniper import Sniper
 from .agents.whale_scout import WhaleScout
 from .broker.paper import PaperBroker
 from .config import Config
@@ -40,7 +42,7 @@ from .sources.solana_rpc import SolanaRPC
 
 log = logging.getLogger("memedesk")
 
-AGENTS = ["whale_scout", "scout", "filter", "analyst", "executor", "risk", "logger", "random"]
+AGENTS = ["whale_scout", "scout", "filter", "analyst", "executor", "risk", "logger", "random", "sniper"]
 
 
 class Desk:
@@ -56,6 +58,8 @@ class Desk:
             self.agents["whale_scout"]["state"] = "off"
         if not cfg.random_control:
             self.agents["random"]["state"] = "off"
+        if not cfg.sniper:
+            self.agents["sniper"]["state"] = "off"
         self.logger.listeners.append(self._on_event)
         self.dex = dex = dex or DexScreener(self.http, cfg.dexscreener_url)
         self.cg_budget = MonthlyBudget(self.logger, "coingecko_demo", cfg.coingecko_monthly_cap)
@@ -75,6 +79,12 @@ class Desk:
         self.filter = Filter(cfg, rpc, rug, bundles, self.logger, jup=self.jup)
         self.analyst = Analyst(cfg, gecko, self.logger, self.grok, smart_wallets)
         self.random = RandomControl(cfg.random_seed) if cfg.random_control else None
+        self.sniper = Sniper(cfg, dex, self.logger) if cfg.sniper else None
+        # same on-chain checks, thresholds for brand-new coins (no 1h-pump rule: they're minutes old)
+        self.sniper_filter = Filter(replace(cfg, max_top10_pct=cfg.sniper_max_top10_pct, max_dev_pct=cfg.sniper_max_dev_pct,
+                                            max_bundle_pct=cfg.sniper_max_bundle_pct, max_h1_change_pct=1e9,
+                                            min_organic_score=cfg.sniper_min_organic_score),
+                                    rpc, rug, bundles, self.logger, jup=self.jup) if cfg.sniper else None
         self.executor = Executor(cfg, self.broker, dex, self.logger)
         self.risk = Risk(cfg, self.logger, dex)
         self.trade_lock = threading.RLock()
@@ -175,7 +185,7 @@ class Desk:
 
     def enter(self, pick: Scorecard | RandomPick) -> str:
         L, c, book = self.logger, pick.vetted.candidate, pick.book
-        src = "analyst" if book == "scored" else "random"
+        src = {"scored": "analyst"}.get(book, book)
         with self.trade_lock:
             equity, cash = self.equity(book)
             L.handoff(src, "executor", c.mint, c.symbol, book)
@@ -196,11 +206,13 @@ class Desk:
                 return "executor"
         if book == "random":
             why = f"random pick {pick.index + 1}/{pick.pool_size}"
+        elif book == "sniper":
+            why = f"snipe · {c.age_h * 60:.0f}m old · momentum {pick.momentum:.0f}"
         else:
             why = (f"{c.reason} · score {pos.score:.0f}" if c.reason else f"score {pos.score:.0f}")
         origin = "whale" if c.trail[0] == "whale_scout" else "pipeline"
         msg = (f"ENTRY {pos.symbol} [{book}] {why} ${pos.cost_usd:.2f} @ {pos.entry_price:.8g} "
-               f"stop {pos.stop_price:.8g} (-{self.cfg.stop_pct:g}%)")
+               f"stop {pos.stop_price:.8g} (-{self.cfg.rules(book).stop_pct:g}%)")
         L.event("executor", "entry", pos.mint, pos.symbol, book, msg,
                 data={"position": pos.to_dict(), "components": getattr(pick, "components", None),
                       "grok": getattr(pick, "grok_note", ""), "origin": origin}, level=logging.WARNING)
@@ -209,6 +221,36 @@ class Desk:
         note = getattr(pick, "grok_note", "")
         L.notify(f"[paper] {msg}\nhttps://dexscreener.com/solana/{pos.pair_address}" + (f"\ngrok: {note}" if note else ""))
         return "entered"
+
+    def _sniper_arm(self, out: dict) -> None:
+        if not self.sniper:
+            return
+        with self.working("sniper"):
+            cands = self.sniper.candidates(self.scout.young)
+        picks = []
+        for c in cands:
+            if self.stop_event.is_set():
+                break
+            if self._blocked(c.mint, "sniper"):
+                continue
+            k = self.sniper.prefilter(c)
+            if k:
+                self._kill(k)
+                out["sniper_skips"] = out.get("sniper_skips", 0) + 1
+                continue
+            self.logger.handoff("sniper", "filter", c.mint, c.symbol)
+            self._watch(c)
+            v = self.sniper_filter.run(c)
+            if isinstance(v, Kill):
+                v.book = "sniper"              # don't block the main desk from this coin later
+                v.agent = "filter"
+                self._kill(v)
+                out["sniper_filter_kills"] = out.get("sniper_filter_kills", 0) + 1
+                continue
+            picks.append(self.sniper.pick(v))
+        for pick in sorted(picks, key=lambda p: -p.momentum):
+            res = self.enter(pick)
+            out[f"sniper_{res}"] = out.get(f"sniper_{res}", 0) + 1
 
     def _random_arm(self, pool: list[Vetted], n: int, out: dict | None = None) -> None:
         if not self.random or n <= 0:
@@ -275,6 +317,10 @@ class Desk:
 
         self.recent_vetted = vetted
         self._random_arm(vetted, passes, out)
+        try:
+            self._sniper_arm(out)
+        except Exception:
+            log.exception("sniper arm failed")
         eq = {b: round(self.equity(b)[0], 2) for b in self.cfg.books}
         self.last_cycle = {"ts": time.time(), "secs": round(time.time() - t0, 1), "outcome": out, "equity": eq}
         self.logger.event("desk", "cycle", reason="scan",

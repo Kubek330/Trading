@@ -376,7 +376,7 @@ def test_dashboard_state_and_server(tmp_path):
     srv = start_dashboard(d)
     port = srv.server_address[1]
     body = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{port}/api/state").read())
-    assert set(body["books"]) == {"scored", "random"}
+    assert set(body["books"]) == {"scored", "random", "sniper"}
     page = urllib.request.urlopen(f"http://127.0.0.1:{port}/").read().decode()
     assert "MemeDesk" in page and "esc(" in page
     srv.shutdown()
@@ -543,3 +543,49 @@ def test_too_young_coin_is_rechecked_when_it_matures(tmp_path):
     assert out.get("scored_entered") == 1, kills(d)
     src = d.logger.db.execute("SELECT data FROM events WHERE kind='scouted' ORDER BY ts DESC").fetchone()[0]
     assert "watchlist" in src
+
+
+def young_pair(mint="Young11111111111111111111111111111111111111", m5=8.0, buys=60, sells=20, age_min=10):
+    p = pair(mint=mint, sym="YNG", age_h=age_min / 60, mcap=200_000, liq=40_000, h1=150)
+    p["txns"]["m5"] = {"buys": buys, "sells": sells}
+    p["priceChange"]["m5"] = m5
+    return p
+
+
+def test_sniper_buys_young_coin_with_momentum_in_its_own_book(tmp_path):
+    yp = young_pair()
+    d, _ = make_desk(tmp_path, pairs=[yp], rep=report(markets=[{"pubkey": yp["pairAddress"],
+                                                                   "liquidityAAccount": "PoolVault",
+                                                                   "lp": {"lpLockedPct": 100}}]))
+    out = d.scan_cycle()
+    assert out.get("sniper_entered") == 1, kills(d)
+    [p] = d.logger.positions("open", "sniper")
+    assert p.cost_usd == pytest.approx(40.0)                         # 4% of the sniper book
+    assert p.stop_price == pytest.approx(p.entry_price * 0.80)       # sniper stop -20%
+    assert not d.logger.positions("open", "scored")                  # main desk still waits for 30m
+    why = d.logger.db.execute("SELECT detail FROM events WHERE kind='decision'").fetchone()[0]
+    assert why.startswith("snipe · 10m old · momentum")
+
+
+def test_sniper_skips_quiet_or_dumping_coins_without_blocking_main_desk(tmp_path):
+    d, _ = make_desk(tmp_path, pairs=[young_pair(buys=5, sells=3)])
+    d.scan_cycle()
+    assert "quiet" in kills(d, "sniper") and not d.logger.positions()
+    mint = young_pair()["baseToken"]["address"]
+    assert d.logger.on_cooldown(mint, "sniper")
+    d2, _ = make_desk(tmp_path / "b", pairs=[young_pair(m5=-12)])
+    d2.scan_cycle()
+    assert "falling" in kills(d2, "sniper")
+
+
+def test_sniper_exit_rules():
+    cfg = Config()
+    r = cfg.rules("sniper")
+    p = Position(id="x", book="sniper", mint="m", symbol="M", pair_address="p", entry_price=1.0, initial_qty=100,
+                 qty=100, cost_usd=100, stop_price=0.8, peak_price=1.0, entry_liq_usd=10_000, score=None,
+                 opened_ts=time.time())
+    assert step(p, 1.40, None, time.time(), r)[0] is None              # +40%: main rules would take profit
+    assert step(p, 1.51, None, time.time(), r)[0] == ("partial", 0.75, "take_profit")
+    p.opened_ts = time.time() - 7 * 3600
+    assert step(p, 1.2, None, time.time(), r)[0][2] == "max_hold"      # 6h max for snipes
+    assert cfg.rules("scored") is cfg

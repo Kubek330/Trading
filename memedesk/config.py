@@ -120,6 +120,29 @@ class Config:
     coingecko_api_key: str = ""              # CoinGecko Demo: backup when GeckoTerminal says 429
     coingecko_monthly_cap: int = 9500        # Demo plan allows 10,000 calls/month; keep a margin
 
+    # ---- sniper (separate experiment book: brand-new coins, 3-30 min old) ----
+    sniper: bool = True
+    sniper_min_age_min: float = 3.0
+    sniper_max_age_min: float = 30.0
+    sniper_min_mcap: float = 30_000.0
+    sniper_max_mcap: float = 3_000_000.0
+    sniper_min_liq: float = 10_000.0
+    sniper_min_txns_m5: int = 20             # real activity right now
+    sniper_min_buy_sell_m5: float = 1.3      # buyers outnumber sellers
+    sniper_max_m5_pct: float = 60.0          # don't buy a vertical candle
+    sniper_track_max: int = 80               # young coins re-checked per scan
+    sniper_max_top10_pct: float = 30.0
+    sniper_max_dev_pct: float = 5.0
+    sniper_max_bundle_pct: float = 15.0
+    sniper_min_organic_score: float = 0.0    # brand-new tokens rarely have a Jupiter score yet
+    sniper_position_pct: float = 4.0         # smaller: sniping is riskier (hard cap 8% still applies)
+    sniper_stop_pct: float = 20.0
+    sniper_tp_trigger_pct: float = 50.0
+    sniper_tp_sell_pct: float = 75.0
+    sniper_runner_trail_pct: float = 30.0
+    sniper_max_hold_h: float = 6.0
+    sniper_max_open_positions: int = 5
+
     # ---- executor ---------------------------------------------------------
     position_pct: float = 8.0                # of the book's equity; clamped to 8
     max_pool_impact_pct: float = 1.0         # size <= this % of pool liquidity
@@ -224,7 +247,17 @@ class Config:
 
     @property
     def books(self) -> list[str]:
-        return ["scored", "random"] if self.random_control else ["scored"]
+        return ["scored"] + (["random"] if self.random_control else []) + (["sniper"] if self.sniper else [])
+
+    def rules(self, book: str) -> "Config":
+        """Exit/sizing rules for a book. Sniper has its own; scored and random share the main ones."""
+        if book != "sniper":
+            return self
+        from dataclasses import replace
+        return replace(self, stop_pct=self.sniper_stop_pct, tp_trigger_pct=self.sniper_tp_trigger_pct,
+                       tp_sell_pct=self.sniper_tp_sell_pct, runner_trail_pct=self.sniper_runner_trail_pct,
+                       max_hold_h=self.sniper_max_hold_h, position_pct=min(self.sniper_position_pct, HARD_MAX_POSITION_PCT),
+                       max_open_positions=self.sniper_max_open_positions)
 
     @property
     def score_weights(self) -> dict[str, float]:

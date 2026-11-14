@@ -23,6 +23,7 @@ AGENT_INFO = {
     "executor": ("Executor", "paper fills, max 8% per trade"),
     "logger": ("Logger", "records every kill, fill and wallet change"),
     "random": ("Random", "luck baseline: skips the analyst"),
+    "sniper": ("Sniper", "hunts brand-new coins 3–30 min old · own book"),
 }
 
 
@@ -130,6 +131,10 @@ def build_state(desk) -> dict:
                   "runner_trail": cfg.runner_trail_pct, "max_hold_h": cfg.max_hold_h,
                   "size_pct": cfg.position_pct, "min_score": cfg.min_score, "scan_s": cfg.scan_interval_s,
                   "monitor_s": cfg.monitor_interval_s},
+        "sniper_rules": None if not cfg.sniper else {
+            "size_pct": cfg.rules("sniper").position_pct, "stop": cfg.sniper_stop_pct, "tp_trigger": cfg.sniper_tp_trigger_pct,
+            "tp_sell": cfg.sniper_tp_sell_pct, "runner_trail": cfg.sniper_runner_trail_pct, "max_hold_h": cfg.sniper_max_hold_h,
+            "age": f"{cfg.sniper_min_age_min:g}–{cfg.sniper_max_age_min:g}m", "tracking": len(desk.sniper.track) if desk.sniper else 0},
     }
 
 
@@ -188,7 +193,7 @@ PAGE = r"""<!doctype html>
 <style>
 :root{--bg:#05070a;--panel:#0b0f14;--panel2:#11161d;--line:#1a2129;--ink:#e9eef3;--mute:#7d8a97;--dim:#3c4752;
 --up:#35d07f;--down:#ff5d5d;--buy:#5aa9ff;
---whale_scout:#ff9f43;--scout:#3ddc84;--filter:#ffd166;--analyst:#e9eef3;--risk:#ff5d73;--executor:#4cc9f0;--logger:#b39dfa;--random:#f78fb3;
+--whale_scout:#ff9f43;--scout:#3ddc84;--filter:#ffd166;--analyst:#e9eef3;--risk:#ff5d73;--executor:#4cc9f0;--logger:#b39dfa;--random:#f78fb3;--sniper:#a3e635;
 --mono:ui-monospace,"JetBrains Mono","SFMono-Regular",Menlo,Consolas,monospace;
 --sans:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif}
 *{box-sizing:border-box}
@@ -296,7 +301,7 @@ footer{color:var(--dim);font-size:10px;margin-top:16px;line-height:1.7}
  <div class="chart" id="chart"></div><div class="axis" id="axis"></div>
 </section>
 <nav class="chips" id="chips"></nav>
-<nav class="tabs"><button data-tab="desk" class="on">Desk</button><button data-tab="pipeline">Pipeline</button><button data-tab="random">Random</button></nav>
+<nav class="tabs"><button data-tab="desk" class="on">Desk</button><button data-tab="pipeline">Pipeline</button><button data-tab="random">Random</button><button data-tab="sniper">Sniper</button></nav>
 <section data-pane="desk">
  <div class="card"><h2><span>positions · <span id="pcount">0</span> coins</span><small>entry → now</small></h2><div id="pos"></div></div>
  <div class="card"><h2><span>Desk core · decisions</span><span class="stream" id="stream"><span class="dot on"></span>streaming</span></h2><div id="dec"></div></div>
@@ -310,6 +315,11 @@ footer{color:var(--dim);font-size:10px;margin-top:16px;line-height:1.7}
  <div class="card"><h2>scored vs random</h2><div class="verdict" id="verdict"></div></div>
  <div class="card"><h2><span>positions · <span id="rpcount">0</span> coins</span><small>entry → now</small></h2><div id="rpos"></div></div>
  <div class="card"><h2>random · decisions</h2><div id="rdec"></div></div>
+</section>
+<section data-pane="sniper" hidden>
+ <div class="card"><h2>sniper</h2><div class="verdict" id="snote"></div></div>
+ <div class="card"><h2><span>positions · <span id="spcount">0</span> coins</span><small>entry → now</small></h2><div id="spos"></div></div>
+ <div class="card"><h2>sniper · decisions</h2><div id="sdec"></div></div>
 </section>
 <footer id="foot"></footer>
 </main>
@@ -329,7 +339,7 @@ const sym=s=>{s=String(s||"?");return s.startsWith("$")?s:"$"+s};
 function hue(s){let h=0;for(const c of String(s))h=(h*31+c.charCodeAt(0))%360;return h}
 function av(img,s,lg){const k=lg?" lg":"",bg=`hsl(${hue(s)} 60% 62%)`,ch=esc(String(s||"?").replace("$","").slice(0,1).toUpperCase());
  return`<span class="av${k}" style="background:${bg}">${ch}${img?`<img src="${esc(img)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">`:""}</span>`}
-const ORDER=["whale_scout","scout","filter","analyst","risk","executor","logger","random"];
+const ORDER=["whale_scout","scout","filter","analyst","risk","executor","logger","random","sniper"];
 function bot(key,size){const c=key?`var(--${key})`:"#05070a",z=size||40; // original robot-blob, drawn for MemeDesk
  const mouth={whale_scout:"M15 26q5 3 10 0",scout:"M15 26h10",filter:"M15 27q5-3 10 0",analyst:"M16 26q4 3 8 0",risk:"M15 25l10 2",
   executor:"M15 26q5 3 10 0",logger:"M15 26h4m2 0h4",random:"M15 26q2.5-2 5 0t5 0"}[key]||"M15 26q5 3 10 0";
@@ -360,7 +370,7 @@ function decisions(list){if(!list.length)return'<div class="empty">no decisions 
   const amt=d.side==="BUY"&&d.usd!=null?` · ${money(d.usd)}`:"";
   return`<div class="drow"><span class="mute">${hhmm(d.ts)}</span><span class="side ${sc}">${esc(d.side)}</span>${av(d.image,d.symbol)}<span class="t"><b>${esc(sym(d.symbol))}</b> · ${esc(d.reason)}${amt}</span></div>`}).join("")}
 let S=null,tab=(location.hash||"#desk").slice(1);
-function setTab(t){tab=["desk","pipeline","random"].includes(t)?t:"desk";
+function setTab(t){tab=["desk","pipeline","random","sniper"].includes(t)&&(t!=="sniper"||!S||S.books.sniper)?t:"desk";
  document.querySelectorAll(".tabs button").forEach(b=>b.classList.toggle("on",b.dataset.tab===tab));
  document.querySelectorAll("[data-pane]").forEach(p=>p.hidden=p.dataset.pane!==tab);
  history.replaceState(null,"","#"+tab);if(S)top_()}
@@ -375,11 +385,11 @@ function top_(){
  const W=S.whale;
  $("subline").textContent=tab==="pipeline"?`whale pipeline · ${W.backend} · ${W.winners_scanned} winners read · ${W.winners_pending} queued`
   :`paper trading · ${S.profile} · ${S.wallets.length} whales tracked · ${up_()}`;
- const book=tab==="random"&&S.books.random?"random":"scored",b=S.books[book];
+ const book=tab==="random"&&S.books.random?"random":tab==="sniper"&&S.books.sniper?"sniper":"scored",b=S.books[book];
  $("hero").hidden=tab==="pipeline";
  const [w,c]=money(b.equity_usd).split(".");$("bal").innerHTML=`${esc(w)}<span class="c">.${esc(c||"00")}</span>`;
  $("dpill").innerHTML=b.delta_1h==null?"":`<span class="dpill ${cls(b.delta_1h)}" title="change over the last hour">${short$(b.delta_1h)}</span>`;
- $("stats").innerHTML=`<span class="box">in ${money(b.start_usd)} · ${b.entries} trade${b.entries===1?"":"s"}</span><span class="mult ${b.multiple<1?"down":""}">${b.multiple==null?"–":b.multiple.toFixed(2)+"×"}</span>${book==="random"?'<span class="box">random control</span>':""}`;
+ $("stats").innerHTML=`<span class="box">in ${money(b.start_usd)} · ${b.entries} trade${b.entries===1?"":"s"}</span><span class="mult ${b.multiple<1?"down":""}">${b.multiple==null?"–":b.multiple.toFixed(2)+"×"}</span>${book==="random"?'<span class="box">random control</span>':book==="sniper"?'<span class="box">sniper book</span>':""}`;
  $("pnlrow").innerHTML=`<span class="${cls(b.pnl_usd)}">${smoney(b.pnl_usd)} · ${b.wins}W ${b.losses}L</span><span class="mute">${hhmm(S.now)}</span>`;
  $("chart").innerHTML=chart(S.curve,book,b.start_usd)}
 async function tick(){
@@ -398,11 +408,12 @@ async function tick(){
  const F=S.funnel,mx=Math.max(1,...F.reasons.map(r=>r.n));
  $("funnel").innerHTML=`<div class="funnel"><b>${F.scouted}</b> scouted <i>→</i> <b>${F.vetted}</b> safe <i>→</i> <b>${F.scored}</b> score ≥ ${S.rules.min_score} <i>→</i> <b>${F.bought}</b> bought</div><div class="mute" style="font-size:11px;margin:-4px 0 8px">${F.watching} coins on the watchlist, re-checked as they mature</div>`
   +(F.reasons.length?'<div class="mute" style="font-size:11px;margin-bottom:4px">most common kills</div>'+F.reasons.map(r=>`<div class="bar"><span class="l">${esc(r.agent)} · ${esc(r.reason)}</span><span class="tr"><span class="f" style="width:${(100*r.n/mx).toFixed(0)}%"></span></span><span class="k">${r.n}</span></div>`).join(""):'<div class="empty">no kills in the last hour</div>');
- const ST={ready:"✓ ready",working:"● working",error:"✕ error",off:"off"},flow=ORDER.filter(k=>S.agents[k]&&k!=="random");
+ const ST={ready:"✓ ready",working:"● working",error:"✕ error",off:"off"},flow=ORDER.filter(k=>S.agents[k]&&k!=="random"&&k!=="sniper");
  const card=(k,nx)=>{const a=S.agents[k];return`<div class="agent ${a.state}${nx?"":" end"}" id="ag-${k}" style="--c:var(--${k});--c2:var(--${nx||k})"><div class="tile">${bot(k,40)}</div>
   <div style="min-width:0"><div class="nm" style="color:var(--ink)">${esc(a.name)}</div><div class="ds">${esc(a.desc)}</div>
   <div class="last">${a.last?`<b>${ago(a.ts)} ·</b> ${esc(a.last)}`:"no action yet"}</div></div><span class="st ${a.state}">${ST[a.state]||esc(a.state)}</span></div>`};
- $("pipe").innerHTML=flow.map((k,i)=>card(k,flow[i+1])).join("")+(S.agents.random?'<div class="branch">↳ branches off Filter, runs beside Analyst</div>'+card("random"):"");
+ $("pipe").innerHTML=flow.map((k,i)=>card(k,flow[i+1])).join("")+(S.agents.random?'<div class="branch">↳ branches off Filter, runs beside Analyst</div>'+card("random"):"")
+  +(S.agents.sniper&&S.agents.sniper.state!=="off"?'<div class="branch" style="margin-top:14px">↳ branches off Scout: coins 3–30 min old, own book</div>'+card("sniper"):"");
  const W=S.whale;$("wcount").textContent=`${S.wallets.length} · ${W.backend}`;
  $("wallets").innerHTML=S.wallets.length?`<table><tr><th>wallet</th><th class="r">score</th><th class="r">wins</th><th class="r">pnl</th><th class="r">seen</th></tr>${S.wallets.slice(0,50).map(w=>`<tr><td><a href="https://solscan.io/account/${encodeURIComponent(w.address)}" target="_blank" rel="noopener">${esc(w.address.slice(0,4))}…${esc(w.address.slice(-4))}</a></td><td class="r">${w.score.toFixed(0)}</td><td class="r">${w.winners}</td><td class="r ${cls(w.pnl_sol)}">${w.pnl_sol==null?"?":(w.pnl_sol>=0?"+":"")+w.pnl_sol.toFixed(2)+"◎"}</td><td class="r mute">${ago(w.last_seen)}</td></tr>`).join("")}</table>`
   :`<div class="empty">none yet · last discovery ${ago(W.last_run)} ago · ${W.winners_pending} winners queued</div>`;
@@ -410,6 +421,9 @@ async function tick(){
   $("verdict").innerHTML=`<div>${esc(v.verdict||"–")}</div><div class="mute" style="margin-top:6px;font:12px var(--mono)">scored ${r.avg_pct==null&&sc.avg_pct==null?"–":pct(sc.avg_pct)}/trade (n=${sc.closed}) · random ${pct(r.avg_pct)}/trade (n=${r.closed})${v.t!=null?` · t=${v.t}`:""}</div>`;
   $("rpcount").textContent=r.positions.length;$("rpos").innerHTML=positions(r.positions);$("rdec").innerHTML=decisions(S.decisions.filter(d=>d.book==="random"))}
  else $("verdict").textContent="Random control is off (DESK_RANDOM_CONTROL=false)";
+ if(S.books.sniper&&S.sniper_rules){const r=S.books.sniper,R2=S.sniper_rules;
+  $("snote").innerHTML=`<div>Separate experiment: coins ${esc(R2.age)} old with live buying pressure. Tracking ${R2.tracking} young coins now.</div><div class="mute" style="margin-top:6px;font:12px var(--mono)">${R2.size_pct}%/trade · stop −${R2.stop}% · +${R2.tp_trigger}% sells ${R2.tp_sell}% · runner trails ${R2.runner_trail}% (floor entry) · max ${R2.max_hold_h}h · ${r.closed} closed${r.win_rate!=null?` · win ${r.win_rate}%`:""}${r.avg_pct!=null?` · avg ${pct(r.avg_pct)}`:""}</div>`;
+  $("spcount").textContent=r.positions.length;$("spos").innerHTML=positions(r.positions);$("sdec").innerHTML=decisions(S.decisions.filter(d=>d.book==="sniper"))}
  const R=S.rules,lc=S.last_cycle||{},o=lc.outcome||{};
  $("foot").innerHTML=`paper trading · ${R.size_pct}%/trade · stop −${R.stop}% · +${R.tp_trigger}% sells ${R.tp_sell}% · runner trails ${R.runner_trail}% (floor entry) · max ${R.max_hold_h}h<br>last scan ${ago(lc.ts)} ago · ${o.in_window??0} in window → ${o.vetted??0} vetted · http ${S.http.requests} req, ${S.http.rate_limited}×429${Object.keys(S.limited_by_host||{}).length?" ("+Object.entries(S.limited_by_host).map(([h,n])=>esc(h.replace("api.",""))+" "+n).join(", ")+")":""}, ${S.http.cache_hits} cached${S.coingecko.enabled?` · CoinGecko backup ${S.coingecko.used}/${S.coingecko.cap} this month`:""}`}
 setTab(tab);tick();setInterval(tick,5000);

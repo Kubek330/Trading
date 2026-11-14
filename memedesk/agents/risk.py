@@ -88,14 +88,15 @@ class Risk:
         mine = [p for p in open_positions if p.book == t.book]
         if why := self.halted(t.book, t.equity_usd):
             return kill("halted", why, cooldown=30)
-        if len(mine) >= self.cfg.max_open_positions:
+        rules = self.cfg.rules(t.book)
+        if len(mine) >= rules.max_open_positions:
             return kill("max_positions", f"{len(mine)} open in {t.book}", cooldown=5)
         if any(p.mint == t.mint for p in mine):
             return kill("already_holding", f"already open in {t.book}", cooldown=60)
         cap = t.equity_usd * HARD_MAX_POSITION_PCT / 100
         if t.size_usd > cap + 1e-6:
             return kill("oversize", f"${t.size_usd:.2f} > 8% cap ${cap:.2f}")
-        return RiskApproval(ticket_id=t.id, stop_pct=self.cfg.stop_pct, max_size_usd=min(cap, t.size_usd))
+        return RiskApproval(ticket_id=t.id, stop_pct=rules.stop_pct, max_size_usd=min(cap, t.size_usd))
 
     # ---- live management --------------------------------------------------
     def monitor(self, executor, lock) -> None:
@@ -122,7 +123,7 @@ class Risk:
             else:
                 p.price_misses = 0
                 price = q["price"]
-                action, events = step(p, price, q["liq"], now, self.cfg)
+                action, events = step(p, price, q["liq"], now, self.cfg.rules(p.book))
                 for e in events:
                     self.logger.event(self.name, "stop_move", p.mint, p.symbol, p.book, e)
                 self.logger.save_position(p)
@@ -142,10 +143,10 @@ class Risk:
                 return
             if kind == "partial":
                 p.tp_taken = True
-                p.stop_price = runner_stop(p, self.cfg)
+                p.stop_price = runner_stop(p, self.cfg.rules(p.book))
                 self.logger.save_position(p)
         leg_pnl = (p.realized_usd - before) - cost_part
-        label = (f"take profit {self.cfg.tp_sell_pct:g}%" if reason == "take_profit"
+        label = (f"take profit {self.cfg.rules(p.book).tp_sell_pct:g}%" if reason == "take_profit"
                  else EXIT_LABELS.get(reason, reason))
         self.logger.event(self.name, "decision", p.mint, p.symbol, "SELL", f"{label} {leg_pnl:+.2f}$",
                           data={"side": "SELL", "book": p.book, "reason": f"{label} {'+' if leg_pnl >= 0 else '−'}${abs(leg_pnl):.2f}",

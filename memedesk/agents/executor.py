@@ -15,7 +15,7 @@ from ..models import (HandoffError, Kill, OrderTicket, Position, RandomPick, Ris
 log = logging.getLogger("memedesk.executor")
 
 TICKET_TTL_S = 60.0
-UPSTREAM = {"scored": "analyst", "random": "random"}
+UPSTREAM = {"scored": "analyst", "random": "random", "sniper": "sniper"}
 
 
 class Executor:
@@ -45,10 +45,10 @@ class Executor:
         if abs(drift) > self.cfg.max_price_drift_pct:
             return kill("price_moved", f"moved {drift:+.1f}% since vetting", cooldown=5)
         h1 = float((q["pair"].get("priceChange") or {}).get("h1") or 0)
-        if h1 > self.cfg.max_h1_change_pct:
+        if book != "sniper" and h1 > self.cfg.max_h1_change_pct:  # sniper judges brand-new coins by its own m5 rules
             return kill("pumped_1h", f"+{h1:.0f}% in 1h at requote", cooldown=60)
 
-        pct = min(self.cfg.position_pct, HARD_MAX_POSITION_PCT)
+        pct = min(self.cfg.rules(book).position_pct, HARD_MAX_POSITION_PCT)
         size = min(equity_usd * pct / 100, liq * self.cfg.max_pool_impact_pct / 100, cash_usd)
         if size < self.cfg.min_trade_usd:
             return kill("size_too_small", f"size ${size:.2f} (cash ${cash_usd:.2f}, liq ${liq:,.0f})", cooldown=5)
