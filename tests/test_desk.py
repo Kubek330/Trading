@@ -797,3 +797,18 @@ def test_momentum_still_respects_hard_safety(tmp_path):
 def test_momentum_exit_rules():
     r = Config().rules("momentum")
     assert (r.stop_pct, r.tp_trigger_pct, r.runner_trail_pct, r.max_hold_h, r.position_pct) == (12, 25, 20, 4, 5)
+
+
+def test_momentum_sizes_real_positions_on_unlabelled_curves_and_skips_too_thin(tmp_path):
+    p = mom_pair(mcap=60_000)
+    p["baseToken"]["address"] = p["pairAddress"] = "Mx" + "1" * 38 + "pump"
+    p["dexId"], p["liquidity"]["usd"] = "pumpdotfun-v2", 300          # unlabelled curve, ~$0 reported liquidity
+    d, _ = _mom_desk(tmp_path, [p])
+    d.scan_cycle()
+    [pos] = d.logger.positions("open", "momentum")
+    assert pos.cost_usd == pytest.approx(50.0)                           # 5% of book; 5% of ~$6k reserves = $300 cap
+    thin = mom_pair(1, mcap=12_000)
+    thin["liquidity"]["usd"] = 5_000                                    # AMM: 5% of $5k = $250 >= $50 ... fine
+    d2, _ = _mom_desk(tmp_path / "b", [thin], mom_max_pool_impact_pct=0.4)  # 0.4% of $5k = $20 < $25
+    d2.scan_cycle()
+    assert "too_thin" in kills(d2, "momentum") and not d2.logger.positions("open", "momentum")

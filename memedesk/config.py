@@ -169,7 +169,9 @@ class Config:
     mom_max_entries_per_scan: int = 2
     mom_max_top10_pct: float = 35.0
     mom_max_dev_pct: float = 10.0
-    mom_position_pct: float = 5.0
+    mom_position_pct: float = 5.0            # $50 of a $1000 book
+    mom_max_pool_impact_pct: float = 5.0     # size <= this % of pool liquidity (or estimated curve reserves)
+    mom_min_trade_usd: float = 25.0          # skip coins too thin for a real position instead of buying $3
     mom_stop_pct: float = 12.0
     mom_tp_trigger_pct: float = 25.0
     mom_tp_sell_pct: float = 75.0
@@ -296,7 +298,8 @@ class Config:
             return replace(self, stop_pct=self.mom_stop_pct, tp_trigger_pct=self.mom_tp_trigger_pct,
                            tp_sell_pct=self.mom_tp_sell_pct, runner_trail_pct=self.mom_runner_trail_pct,
                            max_hold_h=self.mom_max_hold_h, position_pct=min(self.mom_position_pct, HARD_MAX_POSITION_PCT),
-                           max_open_positions=self.mom_max_open_positions)
+                           max_open_positions=self.mom_max_open_positions,
+                           max_pool_impact_pct=self.mom_max_pool_impact_pct, min_trade_usd=self.mom_min_trade_usd)
         if book != "sniper":
             return self
         return replace(self, stop_pct=self.sniper_stop_pct, tp_trigger_pct=self.sniper_tp_trigger_pct,

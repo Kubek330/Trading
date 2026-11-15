@@ -62,12 +62,14 @@ class Executor:
             return kill("pumped_1h", f"+{h1:.0f}% in 1h at requote", cooldown=60)
 
         pct = min(self.cfg.rules(book).position_pct, HARD_MAX_POSITION_PCT)
-        from .filter import BONDING_CURVE_DEXES, curve_liq_estimate
-        if (q["pair"].get("dexId") or "").lower() in BONDING_CURVE_DEXES:
+        from .filter import BONDING_CURVE_DEXES, curve_liq_estimate, on_bonding_curve
+        if (q["pair"].get("dexId") or "").lower() in BONDING_CURVE_DEXES or on_bonding_curve(c):
             liq = max(liq, curve_liq_estimate(float(q.get("mcap") or c.mcap or 0)))
-        size = min(equity_usd * pct / 100, liq * self.cfg.rules(book).max_pool_impact_pct / 100, cash_usd)
-        if size < self.cfg.min_trade_usd:
-            return kill("size_too_small", f"size ${size:.2f} (cash ${cash_usd:.2f}, liq ${liq:,.0f})", cooldown=5)
+        rules = self.cfg.rules(book)
+        size = min(equity_usd * pct / 100, liq * rules.max_pool_impact_pct / 100, cash_usd)
+        if size < rules.min_trade_usd:
+            return kill("too_thin" if size < equity_usd * pct / 100 else "size_too_small",
+                        f"size ${size:.2f} < ${rules.min_trade_usd:g} (cash ${cash_usd:.2f}, liq ${liq:,.0f})", cooldown=5)
         return OrderTicket(pick=pick, book=book, size_usd=round(size, 2), ref_price=px,
                            equity_usd=equity_usd, trail=pick.trail + [self.name])
 
