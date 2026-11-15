@@ -43,6 +43,25 @@ class JupiterTokens:
                         "verified": t.get("isVerified"), "holders": t.get("holderCount"),
                         "audit": t.get("audit") if isinstance(t.get("audit"), dict) else {}})
 
+    def top(self, category: str = "toptraded", interval: str = "1h", limit: int = 50) -> list[str]:
+        """Mints from Jupiter's live top lists (toptrending / toptraded / toporganicscore, 5m/1h/6h/24h).
+        Only Solana tokens trading right now; also primes the organic/audit cache for free."""
+        data = self.http.get(f"{self.base}/{category}/{interval}", params={"limit": limit},
+                             headers={"x-api-key": self.key} if self.key else None, retries=1, cache_ttl=60)
+        if isinstance(data, dict):
+            data = data.get("tokens") or data.get("data") or []
+        out, now = [], time.time()
+        for t in data or []:
+            if not isinstance(t, dict) or not t.get("id"):
+                continue
+            out.append(t["id"])
+            with self._lock:
+                self._cache[t["id"]] = (now + TTL_S, {
+                    "score": t.get("organicScore"), "label": t.get("organicScoreLabel"),
+                    "verified": t.get("isVerified"), "holders": t.get("holderCount"),
+                    "audit": t.get("audit") if isinstance(t.get("audit"), dict) else {}})
+        return out
+
     def info(self, mint: str) -> dict | None:
         """Full cached record (organic score, holder count, audit flags); same call as organic()."""
         return self.organic(mint)

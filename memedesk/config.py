@@ -170,7 +170,7 @@ class Config:
     mom_max_entries_per_scan: int = 2        # per scan when already at the target
     mom_target_positions: int = 4            # try to hold this many at once (fills up to it per scan)
     mom_min_quality: float = 40.0            # momentum score 0-100 a coin needs, free slot or not
-    mom_track_max: int = 150                 # coins momentum re-checks every scan (30 per DexScreener call)
+    mom_track_max: int = 300                 # coins momentum re-checks every scan (30 per DexScreener call)
     mom_track_hours: float = 6.0             # how long a seen coin stays on momentum's list
     mom_trending_bonus: float = 10.0         # quality bonus for coins on a trending list (still must pass every rule)
     mom_stop_confirm_ticks: int = 2          # hard stop fires only after this many price checks in a row below it...

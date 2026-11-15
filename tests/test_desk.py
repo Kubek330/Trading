@@ -1110,3 +1110,30 @@ def test_momentum_no_readd_if_not_clearly_higher_or_falling(tmp_path):
     p0["priceUsd"], p0["priceChange"]["m5"] = str(r.sells[-1]["price"] * 1.2), -3   # higher, but falling now
     d._momentum_arm({}, [])
     assert not [x for x in d.logger.positions("open", "momentum") if x.parent]
+
+
+def test_jupiter_top_lists_feed_discovery_and_momentum_buys(tmp_path):
+    p = mom_pair()
+
+    class JupTop(FakeJup):
+        def top(self, category="toptraded", interval="1h", limit=50):
+            return [p["baseToken"]["address"]] if category == "toptraded" else []
+
+    d, dex = _mom_desk(tmp_path, [p], jup=JupTop())
+    dex.discover_mints = lambda: []                                       # only Jupiter knows about it
+    out = d.scan_cycle()
+    assert out.get("momentum_entered") == 1, kills(d, "momentum")
+    assert "jup_traded" in d.momentum.tags.get(p["baseToken"]["address"], set())
+
+
+def test_momentum_tracker_keeps_active_coins_over_new_dead_ones():
+    from memedesk.agents.momentum import Momentum
+    from memedesk.agents.scout import candidate_from_pair
+    cfg = Config(mom_track_max=3)
+    m = Momentum(cfg)                                                     # no dex: seeds only
+    busy = candidate_from_pair(mom_pair(0), ["x"]); busy.volume["h1"] = 900_000
+    m.candidates([busy])
+    for i in range(1, 6):                                                 # a flood of dead launches
+        c = candidate_from_pair(mom_pair(i), ["pp_new"]); c.volume["h1"] = 50
+        m.candidates([c])
+    assert busy.mint in m.track and len(m.track) == 3

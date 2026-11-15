@@ -87,6 +87,7 @@ class Desk:
                                   {b: cfg.rules(b).slippage_bps for b in cfg.books})
         self.whale = WhaleScout(cfg, gecko, dex, rug, self.chain, self.logger)
         self.scout = Scout(cfg, dex, gecko, self.logger)
+        self.scout.jup = self.jup
         self.pumpportal = None
         if cfg.pumpportal:
             from .sources.pumpportal import PumpPortalFeed

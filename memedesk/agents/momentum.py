@@ -30,7 +30,8 @@ class MomentumPick:
 
 def mom_quality(c: Candidate, cfg: Config) -> float:
     """Momentum score plus a small bonus for being on a trending list (attention), never a reason on its own."""
-    return momentum_score(c) + (cfg.mom_trending_bonus if "trending" in (c.sources or []) else 0.0)
+    tags = set(c.sources or [])
+    return momentum_score(c) + (cfg.mom_trending_bonus if tags & {"trending", "jup_trending", "jup_traded"} else 0.0)
 
 
 class Momentum:
@@ -41,6 +42,7 @@ class Momentum:
         self.cfg, self.dex = cfg, dex
         self.track: dict[str, float] = {}       # mint -> first seen
         self.tags: dict[str, set[str]] = {}     # mint -> discovery tags (e.g. "trending")
+        self.activity: dict[str, float] = {}    # mint -> last seen 1h volume (eviction order)
 
     def candidates(self, seeds: list[Candidate]) -> list[Candidate]:
         """Every coin seen recently, re-checked each scan: this scan's coins plus tracked ones refreshed from
@@ -52,14 +54,19 @@ class Momentum:
             if c.mint and c.age_h <= cfg.mom_max_age_h:
                 self.track.setdefault(c.mint, now)
                 self.tags.setdefault(c.mint, set()).update(c.sources or [])
+                self.activity[c.mint] = c.volume.get("h1", 0.0) or 0.0
                 fresh.setdefault(c.mint, c)
         for m in [m for m, t0 in self.track.items() if now - t0 > cfg.mom_track_hours * 3600]:
             self.track.pop(m, None)
             self.tags.pop(m, None)
-        if len(self.track) > cfg.mom_track_max:                    # keep the newest
-            for m in sorted(self.track, key=self.track.get)[: len(self.track) - cfg.mom_track_max]:
+        if len(self.track) > cfg.mom_track_max:
+            # keep the most actively traded coins: a coin that was quiet for an hour and then takes off must not
+            # be pushed out by a flood of brand-new, dead launches
+            ranked = sorted(self.track, key=lambda m: (self.activity.get(m, 0.0), self.track[m]))
+            for m in ranked[: len(self.track) - cfg.mom_track_max]:
                 self.track.pop(m, None)
                 self.tags.pop(m, None)
+                self.activity.pop(m, None)
         stale = [m for m in self.track if m not in fresh]
         if stale and self.dex is not None:
             from .scout import candidate_from_pair
@@ -72,6 +79,7 @@ class Momentum:
                 if c.age_h > cfg.mom_max_age_h or (c.age_h > 1 and c.mcap < cfg.mom_min_mcap / 4):
                     self.track.pop(m, None)                         # aged out, or a dead launch
                     continue
+                self.activity[m] = c.volume.get("h1", 0.0) or 0.0
                 fresh[m] = c
         return list(fresh.values())
 

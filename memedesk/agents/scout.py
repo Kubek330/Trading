@@ -47,6 +47,7 @@ class Scout:
         self.young: list[Candidate] = []
         self.small: list[Candidate] = []
         self.feed = None                                  # PumpPortal live feed (set by the desk)
+        self.jup = None                                   # Jupiter top lists (set by the desk)
 
     def discover(self) -> dict[str, list[str]]:
         found: dict[str, list[str]] = {}
@@ -55,6 +56,13 @@ class Scout:
                 found.setdefault(m, []).append("dexscreener")
         except DataError as e:
             log.warning("dexscreener discovery failed: %s", e)
+        if self.jup is not None and hasattr(self.jup, "top"):   # what is actually being traded right now
+            for cat, iv, tag in (("toptraded", "5m", "jup_traded"), ("toptrending", "1h", "jup_trending")):
+                try:
+                    for m in self.jup.top(cat, iv):
+                        found.setdefault(m, []).append(tag)
+                except DataError:
+                    pass
         if self.feed is not None:                         # pushed in real time, no polling
             for m, tag in self.feed.drain()[-300:]:
                 found.setdefault(m, []).append(tag)
