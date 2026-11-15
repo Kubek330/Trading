@@ -160,7 +160,8 @@ def build_state(desk) -> dict:
         "momentum_rules": None if not cfg.momentum else {
             "size_pct": cfg.rules("momentum").position_pct, "stop": cfg.mom_stop_pct, "tp_trigger": cfg.mom_tp_trigger_pct,
             "tp_sell": cfg.mom_tp_sell_pct, "runner_trail": cfg.mom_runner_trail_pct, "max_hold_h": cfg.mom_max_hold_h,
-            "min_mcap": cfg.mom_min_mcap},
+            "min_mcap": cfg.mom_min_mcap, "target": cfg.mom_target_positions, "max_open": cfg.mom_max_open_positions,
+            "min_quality": cfg.mom_min_quality, "stale_min": cfg.mom_stale_min},
         "sniper_rules": None if not cfg.sniper else {
             "size_pct": cfg.rules("sniper").position_pct, "stop": cfg.sniper_stop_pct, "tp_trigger": cfg.sniper_tp_trigger_pct,
             "tp_sell": cfg.sniper_tp_sell_pct, "runner_trail": cfg.sniper_runner_trail_pct, "max_hold_h": cfg.sniper_max_hold_h,
@@ -492,6 +493,7 @@ async function tick(){
  else $("verdict").textContent="Random control is off (DESK_RANDOM_CONTROL=false)";
  if(S.books.momentum&&S.momentum_rules){const r=S.books.momentum,R3=S.momentum_rules;
   $("mnote").innerHTML=`<div>Separate experiment: buys whatever is rising right now (≥ $${(R3.min_mcap/1000).toFixed(0)}k mcap, buyers ahead, up over 5m and 1h) with hard safety only: no analyst score, no fake-volume check.</div><div class="mute" style="margin-top:6px;font:12px var(--mono)">${R3.size_pct}%/trade · stop −${R3.stop}% · +${R3.tp_trigger}% sells ${R3.tp_sell}% · runner trails ${R3.runner_trail}% (floor entry) · max ${R3.max_hold_h}h · ${r.closed} closed${r.win_rate!=null?` · win ${r.win_rate}%`:""}${r.avg_pct!=null?` · avg ${pct(r.avg_pct)}`:""}</div>`;
+  $("mnote").innerHTML+=`<div class="mute" style="margin-top:6px;font:12px var(--mono)">holding ${r.positions.length} / target ${R3.target} (max ${R3.max_open}) · quality ≥ ${R3.min_quality} · rotates out of positions flat for ${R3.stale_min}m with momentum gone</div>`;
   $("mpcount").textContent=r.positions.length;$("mpos").innerHTML=positions(r.positions);$("mdec").innerHTML=decisions(S.decisions.filter(d=>d.book==="momentum"))}
  if(S.books.sniper&&S.sniper_rules){const r=S.books.sniper,R2=S.sniper_rules;
   $("snote").innerHTML=`<div>Separate experiment: coins ${esc(R2.age)} old with live buying pressure. Tracking ${R2.tracking} young coins now.</div><div class="mute" style="margin-top:6px;font:12px var(--mono)">${R2.size_pct}%/trade · stop −${R2.stop}% · +${R2.tp_trigger}% sells ${R2.tp_sell}% · runner trails ${R2.runner_trail}% (floor entry) · max ${R2.max_hold_h}h · ${r.closed} closed${r.win_rate!=null?` · win ${r.win_rate}%`:""}${r.avg_pct!=null?` · avg ${pct(r.avg_pct)}`:""}</div>`;

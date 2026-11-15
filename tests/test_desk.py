@@ -785,7 +785,7 @@ def test_momentum_skips_falling_or_late_and_caps_entries(tmp_path):
     assert {"not_rising", "downtrend", "too_late"} <= reasons
     d2, _ = _mom_desk(tmp_path / "b", [mom_pair(i) for i in range(5)])
     d2.scan_cycle()
-    assert len(d2.logger.positions("open", "momentum")) == 2                 # max 2 entries per scan
+    assert len(d2.logger.positions("open", "momentum")) == 4                 # fills up to the 4-position target
 
 
 def test_momentum_still_respects_hard_safety(tmp_path):
@@ -812,3 +812,29 @@ def test_momentum_sizes_real_positions_on_unlabelled_curves_and_skips_too_thin(t
     d2, _ = _mom_desk(tmp_path / "b", [thin], mom_max_pool_impact_pct=0.4)  # 0.4% of $5k = $20 < $25
     d2.scan_cycle()
     assert "too_thin" in kills(d2, "momentum") and not d2.logger.positions("open", "momentum")
+
+
+def test_momentum_spreads_over_several_but_never_buys_weak_coins(tmp_path):
+    strong = [mom_pair(i) for i in range(2)]
+    weak = [mom_pair(10 + i, m5=1, buys=13, sells=10) for i in range(4)]   # rising, but barely
+    d, _ = _mom_desk(tmp_path, strong + weak)
+    d.scan_cycle()
+    held = {p.symbol for p in d.logger.positions("open", "momentum")}
+    assert held == {"MOM0", "MOM1"}                                     # free slots are not filled with weak coins
+    assert "weak_momentum" in kills(d, "momentum")
+
+
+def test_momentum_rotates_out_of_stalled_position(tmp_path):
+    d, dex = _mom_desk(tmp_path, [mom_pair()])
+    d.scan_cycle()
+    [p] = d.logger.positions("open", "momentum")
+    d.logger.db.execute("UPDATE positions SET opened_ts=opened_ts-4000")  # 66 min ago
+    body = p.to_dict(); body["opened_ts"] -= 4000
+    from memedesk.models import Position as P
+    d.logger.save_position(P.from_dict(body))
+    pr = dex.pairs[p.mint]
+    pr["priceChange"]["m5"], pr["txns"]["m5"] = -1.0, {"buys": 8, "sells": 12}
+    dex.set_price(p.mint, p.entry_price * 1.02)                          # flat: +2%
+    d.risk.monitor(d.executor, threading.RLock())
+    [c] = d.logger.positions("closed", "momentum")
+    assert c.exit_reason == "stale_rotate"

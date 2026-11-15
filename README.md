@@ -98,7 +98,8 @@ The sniper hunts **brand-new coins, 3–30 minutes old**: the ones the main desk
 
 A "buy what's rising" book, the opposite of the strict main desk. It has its own $1000 paper book and its own tab.
 - **Universe:** every coin Scout saw that is 3 min – 72 h old and $10k – $20M mcap, including coins under the main desk's $300k floor.
-- **Entry:** up over 5 min (but not more than 60%) and over 1 h (but not more than 300%), at least 10 trades in 5 min, buyers ≥ 1.2× sellers. At most 2 buys per scan, strongest first.
+- **Entry:** up over 5 min (but not more than 60%) and over 1 h (but not more than 300%), at least 10 trades in 5 min, buyers ≥ 1.2× sellers, and a momentum score (buy pressure, activity, 5-min rise) of at least 40.
+- **Several positions, not one:** it aims to hold 4 coins at once (max 6). Below the target it fills several slots in one scan, strongest first, but only with coins that clear every bar; a free slot is never a reason to buy a weak coin. A position that has gone nowhere for 60 min (between −5% and +8%) and has lost its momentum (falling over 5 min, or sellers ahead) is rotated out (`stale_rotate`) to free the money. Runners after take-profit are left alone.
 - **Safety:** hard checks only: mint/freeze authority, LP lock (or bonding curve), not rugged, top-10 ≤ 35%, dev ≤ 10%. **No** analyst score, holder-growth wait, organic score or fake-volume check.
 - **Size:** 5% of the book ($50 of $1000), capped at 5% of pool liquidity or estimated curve reserves. A coin too thin for a $25+ position is skipped (`too_thin`) instead of bought for a few dollars.
 - **Exits:** 5% per trade, stop −12%, at +25% sell 75%, the runner trails 20% (floor at entry), max hold 4 h.
@@ -176,4 +177,4 @@ sqlite3 data/desk_paper.db "select agent, book, reason, count(*) from kills grou
 pip install pytest && python -m pytest -q
 ```
 
-There are 73 offline tests. They cover every filter kill rule (including top-10 holders with the pool vault excluded), the 8% cap, the −15% stop, the +35% partial sell, the runner trailing stop and its floor at entry, the 48h max hold, the Random arm's matched draws from filter survivors, handoff enforcement, the comparison verdicts, the dashboard server, HTTP backoff and caching, a check that only the standard library is imported, and Whale Scout: winner detection, wallet scoring/exclusions/add-drop reasons, whale-mode signals going through Filter/Analyst/Risk, both transaction parsers, signature paging, and pump.fun bonding-curve derivation.
+There are 75 offline tests. They cover every filter kill rule (including top-10 holders with the pool vault excluded), the 8% cap, the −15% stop, the +35% partial sell, the runner trailing stop and its floor at entry, the 48h max hold, the Random arm's matched draws from filter survivors, handoff enforcement, the comparison verdicts, the dashboard server, HTTP backoff and caching, a check that only the standard library is imported, and Whale Scout: winner detection, wallet scoring/exclusions/add-drop reasons, whale-mode signals going through Filter/Analyst/Risk, both transaction parsers, signature paging, and pump.fun bonding-curve derivation.

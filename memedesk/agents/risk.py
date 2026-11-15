@@ -22,7 +22,7 @@ log = logging.getLogger("memedesk.risk")
 
 EXIT_LABELS = {"stop_loss": "stop loss", "take_profit": "take profit 75%", "runner_trail": "trail exit",
                "runner_breakeven": "breakeven exit", "max_hold": "48h max hold", "liq_crash": "liquidity crash",
-               "pool_vanished": "pool vanished", "dump_exit": "dump detected"}
+               "pool_vanished": "pool vanished", "dump_exit": "dump detected", "stale_rotate": "rotated out (stalled)"}
 PRICE_MISS_LIMIT = 20  # consecutive ticks with no price => pool treated as gone
 
 
@@ -70,6 +70,22 @@ def dump_check(p: Position, price: float, pair: dict, cfg: Config):
     b, s = int(tx.get("buys") or 0), int(tx.get("sells") or 0)
     if m5 <= -cfg.dump_m5_pct and s >= max(5, cfg.dump_sell_ratio * b):
         return ("exit", 1.0, "dump_exit")
+    return None
+
+
+def stale_check(p: Position, price: float, pair: dict, now: float, cfg: Config):
+    """Momentum book: free the slot when a position has gone nowhere for an hour and its momentum is gone.
+    Runners (after take-profit) are left alone."""
+    if p.tp_taken or now - p.opened_ts < cfg.mom_stale_min * 60:
+        return None
+    pnl = (price / p.entry_price - 1) * 100
+    if not cfg.mom_stale_low_pct <= pnl <= cfg.mom_stale_high_pct:
+        return None
+    m5 = float((pair.get("priceChange") or {}).get("m5") or 0)
+    tx = (pair.get("txns") or {}).get("m5") or {}
+    b, s = int(tx.get("buys") or 0), int(tx.get("sells") or 0)
+    if m5 < 0 or s >= b:
+        return ("exit", 1.0, "stale_rotate")
     return None
 
 
@@ -139,6 +155,8 @@ class Risk:
                 action, events = step(p, price, q["liq"], now, self.cfg.rules(p.book))
                 if action is None:
                     action = dump_check(p, price, q.get("pair") or {}, self.cfg)
+                if action is None and p.book == "momentum":
+                    action = stale_check(p, price, q.get("pair") or {}, now, self.cfg)
                 for e in events:
                     self.logger.event(self.name, "stop_move", p.mint, p.symbol, p.book, e)
                 self.logger.save_position(p)

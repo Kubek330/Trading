@@ -295,8 +295,18 @@ class Desk:
                 passed.append(c)
         entered, checked = 0, 0
         from .agents.sniper import momentum_score
-        for c in sorted(passed, key=momentum_score, reverse=True):
-            if entered >= self.cfg.mom_max_entries_per_scan or checked >= 6 or self.stop_event.is_set():
+        cfg = self.cfg
+        held = len(self.logger.positions("open", "momentum"))
+        # spread over several coins: fill up to the target, but only with coins that clear the quality bar
+        slots = min(cfg.mom_max_open_positions - held, max(cfg.mom_max_entries_per_scan, cfg.mom_target_positions - held))
+        ranked = [c for c in sorted(passed, key=momentum_score, reverse=True) if momentum_score(c) >= cfg.mom_min_quality]
+        for c in passed:
+            if momentum_score(c) < cfg.mom_min_quality:
+                self.logger.kill(Kill("momentum", c.mint, c.symbol, "weak_momentum",
+                                      f"momentum {momentum_score(c):.0f} < {cfg.mom_min_quality:g}",
+                                      cooldown_min=3, book="momentum"), cfg.kill_cooldown_min, quiet=True)
+        for c in ranked:
+            if entered >= slots or checked >= slots + 4 or self.stop_event.is_set():
                 break
             checked += 1
             self.logger.handoff("momentum", "filter", c.mint, c.symbol)

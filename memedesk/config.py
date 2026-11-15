@@ -166,7 +166,12 @@ class Config:
     mom_min_buy_sell_m5: float = 1.2
     mom_max_m5_pct: float = 60.0
     mom_max_h1_pct: float = 300.0
-    mom_max_entries_per_scan: int = 2
+    mom_max_entries_per_scan: int = 2        # per scan when already at the target
+    mom_target_positions: int = 4            # try to hold this many at once (fills up to it per scan)
+    mom_min_quality: float = 40.0            # momentum score 0-100 a coin needs, free slot or not
+    mom_stale_min: float = 60.0              # rotate out of a position flat for this long...
+    mom_stale_low_pct: float = -5.0          # ...with P&L between these bounds...
+    mom_stale_high_pct: float = 8.0          # ...and its momentum gone (falling 5m or sellers ahead)
     mom_max_top10_pct: float = 35.0
     mom_max_dev_pct: float = 10.0
     mom_position_pct: float = 5.0            # $50 of a $1000 book
