@@ -125,6 +125,8 @@ class OrderTicket:
     id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
     trail: list[str] = field(default_factory=list)
     created_ts: float = field(default_factory=time.time)
+    liq_usd: float = 0.0               # liquidity the fill is simulated against (curve: reserve estimate)
+    venue: str = ""                    # DexScreener dexId (fee schedule)
 
     @property
     def mint(self) -> str:
@@ -179,6 +181,7 @@ class Position:
     price_misses: int = 0
     sells: list = field(default_factory=list)   # [{ts, qty, price, usd, reason}]
     parent: str = ""                             # momentum re-add: id of the position it adds to
+    venue: str = ""                              # dexId at entry (fee schedule for the simulated exit)
 
     @property
     def pnl_usd(self) -> float | None:

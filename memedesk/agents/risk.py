@@ -240,7 +240,8 @@ class Risk:
         before = p.realized_usd
         with lock:
             try:
-                p = executor.sell(p, frac, price, reason)
+                q = self.quotes.get(p.mint) or {}
+                p = executor.sell(p, frac, price, reason, liq_usd=q.get("liq"), mcap=q.get("mcap"))
             except Exception as e:  # keep the desk alive; retry next tick
                 self.logger.event(self.name, "error", p.mint, p.symbol, "sell_failed", str(e),
                                   level=logging.ERROR)

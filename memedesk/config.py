@@ -147,7 +147,7 @@ class Config:
     sniper_max_bundle_pct: float = 15.0
     sniper_min_organic_score: float = 0.0    # brand-new tokens rarely have a Jupiter score yet
     sniper_position_pct: float = 4.0         # smaller: sniping is riskier (hard cap 8% still applies)
-    sniper_max_pool_impact_pct: float = 5.0  # size <= this % of (estimated) curve reserves
+    sniper_max_pool_impact_pct: float = 2.0  # size <= this % of (estimated) curve reserves
     sniper_slippage_bps: int = 400           # paper slippage each way: thin curves move more than pools
     sniper_stop_pct: float = 20.0
     sniper_tp_trigger_pct: float = 50.0
@@ -196,7 +196,7 @@ class Config:
     mom_max_top10_pct: float = 35.0
     mom_max_dev_pct: float = 10.0
     mom_position_pct: float = 5.0            # $50 of a $1000 book
-    mom_max_pool_impact_pct: float = 5.0     # size <= this % of pool liquidity (or estimated curve reserves)
+    mom_max_pool_impact_pct: float = 2.0     # size <= this % of pool liquidity (or estimated curve reserves)
     mom_min_trade_usd: float = 25.0          # skip coins too thin for a real position instead of buying $3
     mom_stop_pct: float = 12.0
     mom_tp_trigger_pct: float = 25.0
@@ -218,6 +218,9 @@ class Config:
     # ---- executor ---------------------------------------------------------
     position_pct: float = 8.0                # of the book's equity; clamped to 8
     max_pool_impact_pct: float = 1.0         # size <= this % of pool liquidity
+    cost_model: str = "realistic"            # realistic: impact from pool size + venue fee + network | flat
+    cost_base_bps: int = 50                  # realistic: latency / MEV allowance per side
+    cost_network_usd: float = 0.15           # realistic: priority fee + tip per transaction
     min_trade_usd: float = 10.0
     slippage_bps: int = 200                  # paper fill haircut each way
     paper_fee_bps: int = 50                  # paper fee each way (DEX + priority)

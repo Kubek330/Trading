@@ -133,6 +133,7 @@ class NoGrok:
 def make_desk(tmp_path, pairs=None, rep=None, rpc=None, bundles=None, gecko=None, jup=None, llm=None, **cfg_over):
     cfg_over.setdefault("random_seed", 7)
     cfg_over.setdefault("profile", "strict")
+    cfg_over.setdefault("cost_model", "flat")              # exact-price tests use the flat model
     cfg = Config(data_dir=str(tmp_path), **cfg_over)
     cfg.validate()
     dex = FakeDex(pairs or [pair()])
@@ -678,7 +679,7 @@ def test_sniper_low_mcap_curve_coin_sized_to_reserves_with_higher_slippage(tmp_p
     out = d.scan_cycle()
     assert out.get("sniper_entered") == 1, kills(d)
     [p] = d.logger.positions("open", "sniper")
-    assert p.cost_usd == pytest.approx(7_500 * 0.10 * 0.05)            # 5% of the ~10%-of-mcap reserve estimate
+    assert p.cost_usd == pytest.approx(7_500 * 0.10 * 0.02)            # 2% of the ~10%-of-mcap reserve estimate
     assert p.entry_price == pytest.approx(0.001 * 1.04 / (1 - 0.005))   # 4% sniper slippage + fee
 
 
@@ -1221,3 +1222,35 @@ def test_gemini_client_parses_json_and_falls_back_to_an_available_model():
     g = Gemini(h, "key", "old-model")
     assert g.json("sys", "user") == {"buys": [], "sells": []}
     assert g.model == "gemini-9-flash" and h.urls[-1].endswith("gemini-9-flash:generateContent")
+
+
+def _round_trip(liq, venue, size=50.0):
+    from memedesk.agents.logger import Logger
+    from memedesk.broker.paper import PaperBroker
+    import tempfile, pathlib
+    b = PaperBroker(Logger(pathlib.Path(tempfile.mkdtemp())), 1000, 200, 50, ["x"], model="realistic")
+    f = b.buy("x", size, 1.0, liq_usd=liq, venue=venue)
+    s = b.sell("x", f.qty, 1.0, liq_usd=liq, venue=venue)                 # price unchanged: pure cost
+    return 100 * (1 - s.usd / size)
+
+
+def test_realistic_costs_depend_on_pool_size_and_venue():
+    deep = _round_trip(200_000, "raydium")
+    thin = _round_trip(5_000, "pumpswap")
+    curve = _round_trip(1_000, "pumpfun")
+    assert 1.0 < deep < 2.5                       # fees + latency + network, almost no impact
+    assert thin > deep + 3                        # $50 into $5k moves the price both ways
+    assert curve > 12                             # thin bonding curve: very expensive
+    flat = 100 * (1 - (1 - 0.02) * (1 - 0.005) / ((1 + 0.02) / (1 - 0.005)))
+    assert deep < flat < thin                     # the old flat 2%+0.5% was too harsh on deep pools, too kind on thin
+
+
+def test_realistic_costs_flow_through_a_real_trade(tmp_path):
+    d, dex = _mom_desk(tmp_path, [mom_pair()], cost_model="realistic")
+    d.scan_cycle()
+    [p] = d.logger.positions("open", "momentum")
+    assert p.venue and p.entry_price > 0.001                              # paid impact + fees on entry
+    d.risk.quotes[p.mint] = {"price": 0.001, "liq": 20_000, "mcap": 120_000, "ts": time.time()}
+    d.executor.sell(p, 1.0, 0.001, "test", liq_usd=20_000, mcap=120_000)
+    [c] = d.logger.positions("closed", "momentum")
+    assert -8 < c.pnl_pct < -2                                            # round trip at an unchanged price costs a few %

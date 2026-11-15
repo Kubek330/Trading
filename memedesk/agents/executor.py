@@ -78,7 +78,8 @@ class Executor:
             return kill("too_thin" if size < equity_usd * pct / 100 else "size_too_small",
                         f"size ${size:.2f} < ${rules.min_trade_usd:g} (cash ${cash_usd:.2f}, liq ${liq:,.0f})", cooldown=5)
         return OrderTicket(pick=pick, book=book, size_usd=round(size, 2), ref_price=px,
-                           equity_usd=equity_usd, trail=pick.trail + [self.name])
+                           equity_usd=equity_usd, trail=pick.trail + [self.name],
+                           liq_usd=liq, venue=(q["pair"].get("dexId") or c.dex_id or ""))
 
     def execute(self, t: OrderTicket, a: RiskApproval) -> Position:
         require_stage(t, "executor", self.name)
@@ -92,7 +93,7 @@ class Executor:
             raise HandoffError("executor: ticket expired")
 
         c = t.pick.vetted.candidate
-        fill = self.broker.buy(t.book, t.size_usd, t.ref_price)
+        fill = self.broker.buy(t.book, t.size_usd, t.ref_price, liq_usd=t.liq_usd or None, venue=t.venue)
         pos = Position(
             id=uuid.uuid4().hex[:12], book=t.book, mint=c.mint, symbol=c.symbol,
             pair_address=c.pair_address, entry_price=fill.price, initial_qty=fill.qty, qty=fill.qty,
@@ -103,14 +104,20 @@ class Executor:
             opened_ts=time.time(), last_price=fill.price,
             creator=t.pick.vetted.facts.creator or "",
             parent=getattr(t.pick, "addon_of", "") or "",
+            venue=t.venue,
         )
         self.logger.save_position(pos)
         return pos
 
-    def sell(self, pos: Position, fraction: float, ref_price: float, reason: str) -> Position:
+    def sell(self, pos: Position, fraction: float, ref_price: float, reason: str,
+             liq_usd: float | None = None, mcap: float | None = None) -> Position:
         """Sell `fraction` of what is still held. fraction=1 closes the position."""
         qty = pos.qty if fraction >= 1 else pos.qty * fraction
-        fill = self.broker.sell(pos.book, qty, ref_price)
+        liq = liq_usd
+        if (pos.venue or "").lower() in _curve_dexes() or (liq is not None and liq < 500 and mcap):
+            from .filter import curve_liq_estimate
+            liq = max(liq or 0.0, curve_liq_estimate(float(mcap or 0)))
+        fill = self.broker.sell(pos.book, qty, ref_price, liq_usd=liq or None, venue=pos.venue)
         pos.qty -= qty
         pos.realized_usd += fill.usd
         pos.sells.append({"ts": time.time(), "qty": qty, "price": fill.price,

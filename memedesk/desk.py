@@ -87,7 +87,8 @@ class Desk:
         self.logger.notifier = Telegram(self.http, cfg.telegram_bot_token, cfg.telegram_chat_id)
         self.broker = PaperBroker(self.logger, cfg.paper_start_usd, cfg.slippage_bps,
                                   cfg.paper_fee_bps, cfg.books,
-                                  {b: cfg.rules(b).slippage_bps for b in cfg.books})
+                                  {b: cfg.rules(b).slippage_bps for b in cfg.books},
+                                  model=cfg.cost_model, base_bps=cfg.cost_base_bps, network_usd=cfg.cost_network_usd)
         self.whale = WhaleScout(cfg, gecko, dex, rug, self.chain, self.logger)
         self.scout = Scout(cfg, dex, gecko, self.logger)
         self.scout.jup = self.jup

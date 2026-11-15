@@ -84,6 +84,27 @@ If nothing gets bought:
 - **Stops first:** the risk monitor fetches prices over its own DexScreener lane, so discovery traffic never delays a stop or exit.
 - **Dead hosts:** after 5 consecutive network failures a source is skipped for 10 minutes instead of being waited on for every coin.
 
+## Realistic costs
+
+Paper fills use `DESK_COST_MODEL=realistic` by default. Each fill is simulated as:
+- **price impact** from the order's size against the pool's quote-side reserve (constant-product: the average fill moves by about size ÷ reserve, in both directions);
+- the **venue's swap fee**: bonding curves ~1%, PumpSwap 0.3%, Raydium 0.25%, Meteora 0.5%;
+- a **0.5% latency/MEV allowance** per side;
+- a **$0.15 network cost** (priority fee + tip) per transaction.
+
+Bonding curves use a reserve estimate of 10% of mcap, because DexScreener reports ~$0 liquidity for them. Momentum, Sniper and AI size at most 2% of liquidity (the main desk 1%), so the bot itself doesn't move the price much.
+
+Round trip for a $50 position at an unchanged price:
+
+| Pool | Round-trip cost |
+|---|---|
+| Raydium, $200k liquidity | 2.2% |
+| PumpSwap, $20k | 3.1% |
+| PumpSwap, $5k | 5.9% |
+| pump.fun curve, $1k | 19.4% |
+
+The old flat model charged about 5% on all of them: too harsh on deep pools and far too kind on thin ones. `DESK_COST_MODEL=flat` brings it back.
+
 ## Fake-volume check
 
 Many fresh memecoins wash-trade, meaning a few wallets trade with each other so the coin looks busy. Before the Analyst scores a coin, and before the Sniper buys one, the desk reads its wallet-level trade tape from GeckoTerminal: the last 60 minutes for the Analyst, the last 15 for the Sniper. It kills the coin as `fake_volume` when any of these is true:
