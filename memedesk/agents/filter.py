@@ -88,7 +88,7 @@ class Filter:
                 freeze_auth = tok.get("freezeAuthority", "UNKNOWN")
         bundle_pct, bundle_src = self.bundles.bundle_pct(c.mint, rep)
         holders = rep.get("totalHolders") if rep else None
-        return SafetyFacts(
+        facts = SafetyFacts(
             mint_authority=mint_auth,
             freeze_authority=freeze_auth,
             lp_locked_pct=rc.lp_locked_pct(rep, c.pair_address) if rep else None,
@@ -102,6 +102,40 @@ class Filter:
             top_holder_owners=rc.holder_owners(rep) if rep else [],
             rugcheck_score=(rep or {}).get("score_normalised"),
         )
+        self._fallbacks(c, facts)
+        return facts
+
+    def _fallbacks(self, c: Candidate, f: SafetyFacts) -> None:
+        """Fill gaps when RugCheck / RPC didn't answer, instead of killing every coin as 'unknown'.
+        - Jupiter Tokens V2 audit: top holders %, dev %, mint/freeze status, holder count, isSus
+        - PumpSwap pools: pump.fun burns the migration LP by design"""
+        if f.lp_locked_pct is None and (c.dex_id or "").lower() == "pumpswap" and c.mint.endswith("pump"):
+            f.lp_locked_pct = 100.0
+        if self.jup is None:            # always consulted when present: cached + batched, and isSus is worth having
+            return
+        try:
+            j = (getattr(self.jup, "info", None) or self.jup.organic)(c.mint) or {}
+        except DataError:
+            return
+        a = j.get("audit") or {}
+
+        def num(k):
+            try:
+                return float(a[k]) if a.get(k) is not None else None
+            except (TypeError, ValueError):
+                return None
+        if f.top10_pct is None and num("topHoldersPercentage") is not None:
+            f.top10_pct = num("topHoldersPercentage")
+        if f.dev_pct is None and num("devBalancePercentage") is not None:
+            f.dev_pct = num("devBalancePercentage")
+        if f.mint_authority == "UNKNOWN" and a.get("mintAuthorityDisabled") is True:
+            f.mint_authority = None
+        if f.freeze_authority == "UNKNOWN" and a.get("freezeAuthorityDisabled") is True:
+            f.freeze_authority = None
+        if f.holders is None and isinstance(j.get("holders"), (int, float)):
+            f.holders = int(j["holders"])
+        if a.get("isSus"):
+            f.jupiter_sus = True
 
     def check(self, c: Candidate, f: SafetyFacts, rugged: bool = False) -> Kill | None:
         cfg = self.cfg
@@ -127,6 +161,8 @@ class Filter:
             return kill("liq_thin", f"liq/mcap {c.liq_mcap_pct:.1f}% < {cfg.min_liq_mcap_pct:.0f}%")
         if rugged:
             return kill("rugged", "RugCheck marks token as rugged")
+        if getattr(f, "jupiter_sus", False):
+            return kill("jupiter_sus", "Jupiter audit flags this token as suspicious")
         # 2b. Jupiter organic score: real wallets vs wash trading / bots
         if cfg.min_organic_score > 0 and self.jup is not None:
             if f.organic_score is None:

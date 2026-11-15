@@ -40,7 +40,12 @@ class JupiterTokens:
                     t = found.get(m)
                     self._cache[m] = (now + TTL_S, None if t is None else {
                         "score": t.get("organicScore"), "label": t.get("organicScoreLabel"),
-                        "verified": t.get("isVerified")})
+                        "verified": t.get("isVerified"), "holders": t.get("holderCount"),
+                        "audit": t.get("audit") if isinstance(t.get("audit"), dict) else {}})
+
+    def info(self, mint: str) -> dict | None:
+        """Full cached record (organic score, holder count, audit flags); same call as organic()."""
+        return self.organic(mint)
 
     def organic(self, mint: str) -> dict | None:
         """{'score','label','verified'} or None if unknown/unavailable."""

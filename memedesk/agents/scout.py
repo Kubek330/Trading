@@ -46,6 +46,7 @@ class Scout:
         self.cfg, self.dex, self.gecko, self.logger = cfg, dex, gecko, logger
         self.young: list[Candidate] = []
         self.small: list[Candidate] = []
+        self.feed = None                                  # PumpPortal live feed (set by the desk)
 
     def discover(self) -> dict[str, list[str]]:
         found: dict[str, list[str]] = {}
@@ -54,6 +55,9 @@ class Scout:
                 found.setdefault(m, []).append("dexscreener")
         except DataError as e:
             log.warning("dexscreener discovery failed: %s", e)
+        if self.feed is not None:                         # pushed in real time, no polling
+            for m, tag in self.feed.drain()[-300:]:
+                found.setdefault(m, []).append(tag)
         if self.gecko and self.cfg.use_geckoterminal_discovery:
             try:
                 for m in self.gecko.discover_mints():

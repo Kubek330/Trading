@@ -54,6 +54,15 @@ def run(cfg: Config) -> int:
             msg = str(e).replace(cfg.helius_api_key or "\0", "***")
             print(f"  ✗ {name:24} {time.time() - t0:5.1f}s  {msg[:90]}\n      → {role}")
             bad_required += role.startswith("required")
+    t0 = time.time()
+    try:
+        from .sources.pumpportal import URL, WebSocket
+        ws = WebSocket(URL, timeout=10)
+        ws.close()
+        print(f"  ✓ {'PumpPortal live feed':24} {time.time() - t0:5.1f}s  websocket handshake ok")
+    except Exception as e:
+        print(f"  ✗ {'PumpPortal live feed':24} {time.time() - t0:5.1f}s  {str(e)[:90]}\n"
+              "      → optional: real-time new tokens + graduations (falls back to polling)")
     print("\n" + ("All required sources work. If there are still no trades, run: python -m memedesk kills -n 40"
                   if not bad_required else
                   f"{bad_required} required source(s) failing: the filter will kill coins until they're back "

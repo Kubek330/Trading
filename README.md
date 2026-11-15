@@ -74,6 +74,14 @@ If nothing gets bought:
 - **Fast profile:** stops are checked every 5 s instead of every 15 s.
 - **"What works" card:** win rate and average return per book, per analyst-score band, and per exit reason, from closed trades only.
 
+## Free data sources
+
+- **PumpPortal live feed:** a free WebSocket that pushes every new pump.fun token and every graduation within about 1 s. The desk runs it in a background thread with a stdlib-only WebSocket client that reconnects on its own. It only adds mints to discovery; prices and safety still come from the normal pipeline. Turn it off with `DESK_PUMPPORTAL=false`. `doctor` checks it.
+- **Jupiter Tokens V2:** besides the organic score, its `audit` fields (top holders %, dev %, mint/freeze status) and holder count fill in for RugCheck when RugCheck or the RPC doesn't answer, so coins aren't killed as "unknown". A token Jupiter flags `isSus` is killed. A free key from portal.jup.ag (`JUP_API_KEY`) is recommended, because the keyless lite-api is being throttled ahead of retirement.
+- **PumpSwap pools:** pump.fun burns the liquidity pool tokens it creates at migration, so a PumpSwap pool of a pump.fun mint counts as LP-burned when RugCheck has no data.
+- **Helius free tier:** setting `HELIUS_API_KEY` replaces the slow public RPC for both the filter and the whale scout.
+- **Dead hosts:** after 5 consecutive network failures a source is skipped for 10 minutes instead of being waited on for every coin.
+
 ## Fake-volume check
 
 Many fresh memecoins wash-trade, meaning a few wallets trade with each other so the coin looks busy. Before the Analyst scores a coin, and before the Sniper buys one, the desk reads its wallet-level trade tape from GeckoTerminal: the last 60 minutes for the Analyst, the last 15 for the Sniper. It kills the coin as `fake_volume` when any of these is true:
@@ -180,4 +188,4 @@ sqlite3 data/desk_paper.db "select agent, book, reason, count(*) from kills grou
 pip install pytest && python -m pytest -q
 ```
 
-There are 81 offline tests. They cover every filter kill rule (including top-10 holders with the pool vault excluded), the 8% cap, the −15% stop, the +35% partial sell, the runner trailing stop and its floor at entry, the 48h max hold, the Random arm's matched draws from filter survivors, handoff enforcement, the comparison verdicts, the dashboard server, HTTP backoff and caching, a check that only the standard library is imported, and Whale Scout: winner detection, wallet scoring/exclusions/add-drop reasons, whale-mode signals going through Filter/Analyst/Risk, both transaction parsers, signature paging, and pump.fun bonding-curve derivation.
+There are 83 offline tests. They cover every filter kill rule (including top-10 holders with the pool vault excluded), the 8% cap, the −15% stop, the +35% partial sell, the runner trailing stop and its floor at entry, the 48h max hold, the Random arm's matched draws from filter survivors, handoff enforcement, the comparison verdicts, the dashboard server, HTTP backoff and caching, a check that only the standard library is imported, and Whale Scout: winner detection, wallet scoring/exclusions/add-drop reasons, whale-mode signals going through Filter/Analyst/Risk, both transaction parsers, signature paging, and pump.fun bonding-curve derivation.

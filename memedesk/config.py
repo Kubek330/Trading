@@ -126,6 +126,7 @@ class Config:
     whale_signal_window_min: float = 10.0
     whale_watch_interval_s: float = 0.0      # poll tracked wallets (0 = auto: 60s Helius / 180s public)
     helius_api_key: str = ""
+    pumpportal: bool = True                  # free live WebSocket feed of new pump.fun tokens + graduations
     jup_api_key: str = ""                    # free at portal.jup.ag (organic score)
     coingecko_api_key: str = ""              # CoinGecko Demo: backup when GeckoTerminal says 429
     coingecko_monthly_cap: int = 9500        # Demo plan allows 10,000 calls/month; keep a margin

@@ -80,6 +80,7 @@ class SafetyFacts:
     rugcheck_score: float | None = None
     organic_score: float | None = None
     organic_label: str | None = None
+    jupiter_sus: bool = False
 
 
 @dataclass

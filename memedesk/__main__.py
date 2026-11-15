@@ -52,6 +52,11 @@ def main(argv: list[str] | None = None) -> int:
             print(f"last scan: {lc.get('secs')}s · sniper tracking {lc.get('sniper_tracking', '?')} young coins · "
                   f"{o.get('sniper_skips', 0)} sniper skips · http {h.get('requests', '?')} req, "
                   f"{h.get('rate_limited', '?')}x429, {h.get('errors', '?')} errors")
+            pp = lc.get("pumpportal")
+            if pp:
+                print(f"pumpportal live feed: {'connected' if pp.get('connected') else 'DOWN'} · "
+                      f"{pp.get('new', 0)} new tokens, {pp.get('migrated', 0)} graduations since start · "
+                      f"momentum tracking {lc.get('momentum_tracking', '?')} coins")
             lim = lc.get("limited_by_host") or {}
             if lim:
                 print("rate-limited by: " + ", ".join(f"{k} {v}" for k, v in sorted(lim.items(), key=lambda kv: -kv[1])))

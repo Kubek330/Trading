@@ -86,6 +86,11 @@ class Desk:
                                   {b: cfg.rules(b).slippage_bps for b in cfg.books})
         self.whale = WhaleScout(cfg, gecko, dex, rug, self.chain, self.logger)
         self.scout = Scout(cfg, dex, gecko, self.logger)
+        self.pumpportal = None
+        if cfg.pumpportal:
+            from .sources.pumpportal import PumpPortalFeed
+            self.pumpportal = PumpPortalFeed()
+            self.scout.feed = self.pumpportal
         self.filter = Filter(cfg, rpc, rug, bundles, self.logger, jup=self.jup)
         self.analyst = Analyst(cfg, gecko, self.logger, self.grok, smart_wallets)
         self.random = RandomControl(cfg.random_seed) if cfg.random_control else None
@@ -100,7 +105,7 @@ class Desk:
         self.mom_filter = Filter(replace(cfg, profile="active", max_top10_pct=cfg.mom_max_top10_pct,
                                          max_dev_pct=cfg.mom_max_dev_pct, max_bundle_pct=100.0,
                                          max_h1_change_pct=1e9, min_liq_mcap_pct=0.0, min_organic_score=0.0),
-                                 rpc, rug, bundles, self.logger, jup=None) if cfg.momentum else None
+                                 rpc, rug, bundles, self.logger, jup=self.jup) if cfg.momentum else None
         self._young_cands: list[Candidate] = []
         self._mom_seeds: list[Candidate] = []
         self._mom_thread = False
@@ -410,7 +415,10 @@ class Desk:
         eq = {b: round(self.equity(b)[0], 2) for b in self.cfg.books}
         self.last_cycle = {"ts": time.time(), "secs": round(time.time() - t0, 1), "outcome": out, "equity": eq,
                            "http": dict(self.http.stats), "limited_by_host": dict(getattr(self.http, "limited_by_host", {})),
-                           "sniper_tracking": len(self.sniper.track) if self.sniper else 0}
+                           "sniper_tracking": len(self.sniper.track) if self.sniper else 0,
+                           "momentum_tracking": len(self.momentum.track) if self.momentum else 0,
+                           "pumpportal": None if self.pumpportal is None else
+                           {"connected": self.pumpportal.connected, **self.pumpportal.stats}}
         self.logger.event("desk", "cycle", reason="scan",
                           detail=f"{out} | equity {eq} | {time.time() - t0:.0f}s | http {self.http.stats}",
                           data=self.last_cycle)
@@ -523,6 +531,8 @@ class Desk:
         threads = [threading.Thread(target=self._monitor_loop, name="risk-monitor", daemon=True)]
         if c.whale_scout or c.whale_mode:
             threads.append(threading.Thread(target=self._whale_loop, name="whale", daemon=True))
+        if self.pumpportal is not None:
+            self.pumpportal.start(self.stop_event)
         if self.momentum:
             self._mom_thread = True
             threads.append(threading.Thread(target=self._momentum_loop, name="momentum", daemon=True))

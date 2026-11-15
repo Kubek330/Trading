@@ -930,3 +930,70 @@ def test_why_lists_momentum_book(tmp_path, capsys, monkeypatch):
     main(["why", "--env", str(tmp_path / "none.env")])
     out = capsys.readouterr().out
     assert "momentum book · 1 bought" in out
+
+
+def test_jupiter_audit_fills_in_when_rugcheck_is_down(tmp_path):
+    class JupAudit(FakeJup):
+        def __init__(self, audit):
+            super().__init__()
+            self.a = audit
+
+        def info(self, mint):
+            return {"score": 80, "label": "high", "holders": 2400, "audit": self.a}
+
+    yp = young_pair()
+    good = {"topHoldersPercentage": 14.0, "devBalancePercentage": 0.4,
+            "mintAuthorityDisabled": True, "freezeAuthorityDisabled": True}
+    d, _ = make_desk(tmp_path, pairs=[yp], rep=None, rpc=FakeRPC(fail=True), jup=JupAudit(good), profile="active")
+    d.filter.rug = d.sniper_filter.rug = FakeRug(None)                    # RugCheck down
+    yp["dexId"] = "pumpfun"                                               # curve: no LP to check
+    out = d.scan_cycle()
+    assert out.get("sniper_entered") == 1, kills(d)
+    d2, _ = make_desk(tmp_path / "b", pairs=[young_pair()], rpc=FakeRPC(fail=True), profile="active",
+                      jup=JupAudit({**good, "isSus": True}))
+    d2.scan_cycle()
+    assert "jupiter_sus" in kills(d2, "sniper")
+
+
+def test_websocket_client_against_local_server():
+    import base64 as b64
+    import hashlib
+    import json
+    import socket
+    import threading
+    from memedesk.sources.pumpportal import FrameReader, PumpPortalFeed, WebSocket, encode_frame
+
+    srv = socket.socket(); srv.bind(("127.0.0.1", 0)); srv.listen(1)
+    port = srv.getsockname()[1]
+    got = []
+
+    def server():
+        conn, _ = srv.accept()
+        req = b""
+        while b"\r\n\r\n" not in req:
+            req += conn.recv(4096)
+        key = [l.split(b": ")[1] for l in req.split(b"\r\n") if l.lower().startswith(b"sec-websocket-key")][0]
+        acc = b64.b64encode(hashlib.sha1(key + b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11").digest())
+        conn.sendall(b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+                     b"Sec-WebSocket-Accept: " + acc + b"\r\n\r\n")
+        r = FrameReader(conn.recv)
+        for _ in range(2):                                             # client subscriptions (masked)
+            got.append(json.loads(r.frame()[2]))
+        conn.sendall(encode_frame(0x9, b"ping?", mask=False))           # server ping
+        msg = json.dumps({"mint": "A" * 40 + "pump", "txType": "create"}).encode()
+        conn.sendall(bytes([0x01, len(msg[:10])]) + msg[:10] + bytes([0x80, len(msg[10:])]) + msg[10:])  # fragmented
+        got.append(("pong", r.frame()))
+        conn.close()
+
+    t = threading.Thread(target=server); t.start()
+    ws = WebSocket(f"ws://127.0.0.1:{port}/api/data", timeout=5)
+    ws.send_text(json.dumps({"method": "subscribeNewToken"}))
+    ws.send_text(json.dumps({"method": "subscribeMigration"}))
+    feed = PumpPortalFeed()
+    feed.handle(json.loads(ws.recv_text()))                             # ping answered transparently
+    t.join(5)
+    assert got[0] == {"method": "subscribeNewToken"} and got[1] == {"method": "subscribeMigration"}
+    assert got[2][1][0] == 0xA and got[2][1][2] == b"ping?"             # pong echoed the ping payload
+    assert feed.drain() == [("A" * 40 + "pump", "pp_new")]
+    feed.handle({"mint": "B" * 44, "txType": "migrate", "pool": "pump-amm"})
+    assert feed.drain() == [("B" * 44, "pp_migrated")]
