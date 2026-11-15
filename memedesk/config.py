@@ -196,7 +196,7 @@ class Config:
     mom_stop_pct: float = 12.0
     mom_tp_trigger_pct: float = 25.0
     mom_tp_sell_pct: float = 75.0
-    mom_runner_trail_pct: float = 20.0
+    mom_runner_trail_pct: float = 12.0
     mom_max_hold_h: float = 4.0
     mom_max_open_positions: int = 6
 

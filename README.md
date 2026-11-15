@@ -116,7 +116,7 @@ A "buy what's rising" book, the opposite of the strict main desk. It has its own
 - **Trending lists:** a coin on a GeckoTerminal trending list gets +10 on its momentum score, which can tip a borderline coin but never buys one on its own. Trending lists lag and DexScreener rankings are partly paid boosts, so live buy pressure stays the main signal.
 - **Safety:** hard checks only: mint/freeze authority, LP lock (or bonding curve), not rugged, top-10 ≤ 35%, dev ≤ 10%. **No** analyst score, holder-growth wait, organic score or fake-volume check.
 - **Size:** 5% of the book ($50 of $1000), capped at 5% of pool liquidity or estimated curve reserves. A coin too thin for a $25+ position is skipped (`too_thin`) instead of bought for a few dollars.
-- **Exits:** 5% per trade, stop −12%, at +25% sell 75%, the runner trails 20% (floor at entry), max hold 4 h.
+- **Exits:** 5% per trade, stop −12%, at +25% sell 75%, the runner trails 12% below its peak (floor at entry; 8% after a spike), max hold 4 h.
 - **Own loop:** Momentum re-checks its watchlist every 60 s in its own thread, so a slow full scan (filter, analyst, whale scout) never delays it.
 - **Turning it off:** set `DESK_MOMENTUM=false`. Thresholds are the `DESK_MOM_*` settings.
 

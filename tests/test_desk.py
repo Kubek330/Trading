@@ -796,7 +796,7 @@ def test_momentum_still_respects_hard_safety(tmp_path):
 
 def test_momentum_exit_rules():
     r = Config().rules("momentum")
-    assert (r.stop_pct, r.tp_trigger_pct, r.runner_trail_pct, r.max_hold_h, r.position_pct) == (12, 25, 20, 4, 5)
+    assert (r.stop_pct, r.tp_trigger_pct, r.runner_trail_pct, r.max_hold_h, r.position_pct) == (12, 25, 12, 4, 5)
 
 
 def test_momentum_sizes_real_positions_on_unlabelled_curves_and_skips_too_thin(tmp_path):
