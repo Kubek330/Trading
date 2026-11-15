@@ -22,7 +22,8 @@ log = logging.getLogger("memedesk.risk")
 
 EXIT_LABELS = {"stop_loss": "stop loss", "take_profit": "take profit 75%", "runner_trail": "trail exit",
                "runner_breakeven": "breakeven exit", "max_hold": "48h max hold", "liq_crash": "liquidity crash",
-               "pool_vanished": "pool vanished", "dump_exit": "dump detected", "stale_rotate": "rotated out (stalled)"}
+               "pool_vanished": "pool vanished", "dump_exit": "dump detected", "stale_rotate": "rotated out (stalled)",
+               "chop_take_profit": "small profit, sideways"}
 PRICE_MISS_LIMIT = 20  # consecutive ticks with no price => pool treated as gone
 
 
@@ -70,6 +71,20 @@ def dump_check(p: Position, price: float, pair: dict, cfg: Config):
     b, s = int(tx.get("buys") or 0), int(tx.get("sells") or 0)
     if m5 <= -cfg.dump_m5_pct and s >= max(5, cfg.dump_sell_ratio * b):
         return ("exit", 1.0, "dump_exit")
+    return None
+
+
+def chop_check(p: Position, price: float, now: float, cfg: Config):
+    """Momentum book: a position that has only drifted a few % for 20+ min and is now slightly in profit
+    (after exit slippage and fee) sells most of it and keeps a runner floored at entry."""
+    if p.tp_taken or now - p.opened_ts < cfg.mom_chop_min * 60:
+        return None
+    if (p.peak_price / p.entry_price - 1) * 100 > cfg.mom_chop_max_peak_pct:
+        return None                                  # it did run at some point: let the normal exits handle it
+    slip = cfg.rules(p.book).slippage_bps / 1e4
+    net = (price * (1 - slip) * (1 - cfg.paper_fee_bps / 1e4) / p.entry_price - 1) * 100
+    if net >= cfg.mom_chop_min_net_pct:
+        return ("partial", cfg.mom_chop_sell_pct / 100, "chop_take_profit")
     return None
 
 
@@ -156,6 +171,8 @@ class Risk:
                 if action is None:
                     action = dump_check(p, price, q.get("pair") or {}, self.cfg)
                 if action is None and p.book == "momentum":
+                    action = chop_check(p, price, now, self.cfg)
+                if action is None and p.book == "momentum":
                     action = stale_check(p, price, q.get("pair") or {}, now, self.cfg)
                 for e in events:
                     self.logger.event(self.name, "stop_move", p.mint, p.symbol, p.book, e)
@@ -180,6 +197,7 @@ class Risk:
                 self.logger.save_position(p)
         leg_pnl = (p.realized_usd - before) - cost_part
         label = (f"take profit {self.cfg.rules(p.book).tp_sell_pct:g}%" if reason == "take_profit"
+                 else f"small profit {frac * 100:.0f}%, sideways" if reason == "chop_take_profit"
                  else EXIT_LABELS.get(reason, reason))
         self.logger.event(self.name, "decision", p.mint, p.symbol, "SELL", f"{label} {leg_pnl:+.2f}$",
                           data={"side": "SELL", "book": p.book, "reason": f"{label} {'+' if leg_pnl >= 0 else '−'}${abs(leg_pnl):.2f}",

@@ -55,6 +55,7 @@ class GeckoTerminal:
         self.http, self.base = http, base.rstrip("/")
         self.cg_key, self.budget = cg_key, budget
         self.fallback_calls = 0
+        self.trending: set[str] = set()        # mints seen on a trending list (attention signal, not a buy signal)
 
     def _get(self, path: str, params: dict | None = None, cache_ttl: float = 0.0, retries: int | None = None):
         try:
@@ -81,6 +82,7 @@ class GeckoTerminal:
 
     def discover_mints(self) -> list[str]:
         out: list[str] = []
+        self.trending = set()
         for path, params in (("/networks/solana/trending_pools", {"duration": "5m"}),
                              ("/networks/solana/trending_pools", {"duration": "1h"}),
                              ("/networks/solana/trending_pools", {"duration": "6h"}),
@@ -90,9 +92,12 @@ class GeckoTerminal:
                              # Most of them never pay for a DexScreener profile, so the profile feed misses them.
                              ("/networks/solana/dexes/pump-fun/pools", {"sort": "h24_tx_count_desc"})):
             try:
-                out.extend(self._pool_mints(path, params))
+                got = self._pool_mints(path, params)
             except DataError:
                 continue
+            out.extend(got)
+            if "trending" in path:
+                self.trending.update(got)
         return list(dict.fromkeys(out))
 
     def discover_pools(self) -> list[dict]:

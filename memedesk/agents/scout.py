@@ -58,6 +58,8 @@ class Scout:
             try:
                 for m in self.gecko.discover_mints():
                     found.setdefault(m, []).append("geckoterminal")
+                for m in getattr(self.gecko, "trending", ()):
+                    found.setdefault(m, []).append("trending")
             except DataError as e:
                 log.warning("geckoterminal discovery failed: %s", e)
         return found

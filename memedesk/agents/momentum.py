@@ -26,6 +26,11 @@ class MomentumPick:
     score: float | None = None
 
 
+def mom_quality(c: Candidate, cfg: Config) -> float:
+    """Momentum score plus a small bonus for being on a trending list (attention), never a reason on its own."""
+    return momentum_score(c) + (cfg.mom_trending_bonus if "trending" in (c.sources or []) else 0.0)
+
+
 class Momentum:
     name = "momentum"
     book = "momentum"
@@ -67,4 +72,4 @@ class Momentum:
 
     def pick(self, v: Vetted) -> MomentumPick:
         require_stage(v, "filter", self.name)
-        return MomentumPick(vetted=v, momentum=momentum_score(v.candidate), trail=v.trail + [self.name])
+        return MomentumPick(vetted=v, momentum=mom_quality(v.candidate, self.cfg), trail=v.trail + [self.name])

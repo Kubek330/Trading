@@ -294,8 +294,11 @@ class Desk:
                     continue
                 passed.append(c)
         entered, checked = 0, 0
-        from .agents.sniper import momentum_score
+        from .agents.momentum import mom_quality
         cfg = self.cfg
+
+        def momentum_score(c):
+            return mom_quality(c, cfg)
         held = len(self.logger.positions("open", "momentum"))
         # spread over several coins: fill up to the target, but only with coins that clear the quality bar
         slots = min(cfg.mom_max_open_positions - held, max(cfg.mom_max_entries_per_scan, cfg.mom_target_positions - held))

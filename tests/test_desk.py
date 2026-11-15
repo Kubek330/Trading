@@ -838,3 +838,48 @@ def test_momentum_rotates_out_of_stalled_position(tmp_path):
     d.risk.monitor(d.executor, threading.RLock())
     [c] = d.logger.positions("closed", "momentum")
     assert c.exit_reason == "stale_rotate"
+
+
+def _age_position(d, p, secs):
+    from memedesk.models import Position as P
+    body = p.to_dict(); body["opened_ts"] -= secs
+    d.logger.save_position(P.from_dict(body))
+
+
+def test_momentum_sideways_takes_small_profit_and_keeps_runner(tmp_path):
+    d, dex = _mom_desk(tmp_path, [mom_pair()])
+    d.scan_cycle()
+    [p] = d.logger.positions("open", "momentum")
+    _age_position(d, p, 25 * 60)                                          # 25 min, never ran
+    dex.set_price(p.mint, p.entry_price * 1.045)                          # +4.5% gross, ~+1.9% after exit costs
+    d.risk.monitor(d.executor, threading.RLock())
+    [p2] = d.logger.positions("open", "momentum")
+    assert p2.tp_taken and p2.qty == pytest.approx(p2.initial_qty * 0.25)
+    assert p2.stop_price == pytest.approx(p2.entry_price)               # runner can't turn into a loss
+    sell = d.logger.db.execute("SELECT detail FROM events WHERE kind='decision' AND reason='SELL'").fetchone()[0]
+    assert sell.startswith("small profit 75%, sideways")
+
+
+def test_momentum_sideways_not_sold_at_net_loss_or_too_early(tmp_path):
+    d, dex = _mom_desk(tmp_path, [mom_pair()])
+    d.scan_cycle()
+    [p] = d.logger.positions("open", "momentum")
+    _age_position(d, p, 25 * 60)
+    dex.set_price(p.mint, p.entry_price * 1.015)                          # +1.5% gross is a loss after exit costs
+    d.risk.monitor(d.executor, threading.RLock())
+    assert not d.logger.positions("open", "momentum")[0].tp_taken
+    d2, dex2 = _mom_desk(tmp_path / "b", [mom_pair()])
+    d2.scan_cycle()
+    [q] = d2.logger.positions("open", "momentum")
+    dex2.set_price(q.mint, q.entry_price * 1.05)                          # only minutes in: keep riding
+    d2.risk.monitor(d2.executor, threading.RLock())
+    assert not d2.logger.positions("open", "momentum")[0].tp_taken
+
+
+def test_trending_bonus_only_tips_the_balance():
+    from memedesk.agents.momentum import mom_quality
+    from memedesk.agents.scout import candidate_from_pair
+    cfg = Config()
+    c = candidate_from_pair(mom_pair(m5=1, buys=22, sells=15), ["geckoterminal"])
+    t = candidate_from_pair(mom_pair(m5=1, buys=22, sells=15), ["geckoterminal", "trending"])
+    assert mom_quality(t, cfg) == pytest.approx(mom_quality(c, cfg) + 10)
