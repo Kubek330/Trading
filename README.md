@@ -105,6 +105,7 @@ A "buy what's rising" book, the opposite of the strict main desk. It has its own
 - **Safety:** hard checks only: mint/freeze authority, LP lock (or bonding curve), not rugged, top-10 ≤ 35%, dev ≤ 10%. **No** analyst score, holder-growth wait, organic score or fake-volume check.
 - **Size:** 5% of the book ($50 of $1000), capped at 5% of pool liquidity or estimated curve reserves. A coin too thin for a $25+ position is skipped (`too_thin`) instead of bought for a few dollars.
 - **Exits:** 5% per trade, stop −12%, at +25% sell 75%, the runner trails 20% (floor at entry), max hold 4 h.
+- **Own loop:** Momentum re-checks its watchlist every 60 s in its own thread, so a slow full scan (filter, analyst, whale scout) never delays it.
 - **Turning it off:** set `DESK_MOMENTUM=false`. Thresholds are the `DESK_MOM_*` settings.
 
 Comparing Momentum with the Desk book on the dashboard shows whether buying often beats being picky, after slippage and fees.
@@ -179,4 +180,4 @@ sqlite3 data/desk_paper.db "select agent, book, reason, count(*) from kills grou
 pip install pytest && python -m pytest -q
 ```
 
-There are 79 offline tests. They cover every filter kill rule (including top-10 holders with the pool vault excluded), the 8% cap, the −15% stop, the +35% partial sell, the runner trailing stop and its floor at entry, the 48h max hold, the Random arm's matched draws from filter survivors, handoff enforcement, the comparison verdicts, the dashboard server, HTTP backoff and caching, a check that only the standard library is imported, and Whale Scout: winner detection, wallet scoring/exclusions/add-drop reasons, whale-mode signals going through Filter/Analyst/Risk, both transaction parsers, signature paging, and pump.fun bonding-curve derivation.
+There are 81 offline tests. They cover every filter kill rule (including top-10 holders with the pool vault excluded), the 8% cap, the −15% stop, the +35% partial sell, the runner trailing stop and its floor at entry, the 48h max hold, the Random arm's matched draws from filter survivors, handoff enforcement, the comparison verdicts, the dashboard server, HTTP backoff and caching, a check that only the standard library is imported, and Whale Scout: winner detection, wallet scoring/exclusions/add-drop reasons, whale-mode signals going through Filter/Analyst/Risk, both transaction parsers, signature paging, and pump.fun bonding-curve derivation.

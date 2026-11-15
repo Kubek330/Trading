@@ -48,6 +48,8 @@ class HttpClient:
         self.stats = {"requests": 0, "errors": 0, "rate_limited": 0, "cache_hits": 0}
         self.limited_by_host: dict[str, int] = {}
         self._live_rpm: dict[str, float] = {}
+        self._fails: dict[str, int] = {}
+        self._down_until: dict[str, float] = {}
         self.stop_event = threading.Event()  # set on shutdown: aborts waits immediately
 
     def _sleep(self, secs: float) -> None:
@@ -100,6 +102,8 @@ class HttpClient:
             body = _json.dumps(json).encode()
             hdrs["Content-Type"] = "application/json"
         last = ""
+        if self._down_until.get(host, 0) > time.monotonic():
+            raise DataError(f"{host} skipped: failing repeatedly, retrying in a few minutes")
         for attempt in range(retries):
             if self.stop_event.is_set():
                 raise DataError("desk shutting down")
@@ -124,6 +128,8 @@ class HttpClient:
             except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as e:
                 self.stats["errors"] += 1
                 last = f"{type(e).__name__}: {e}"
+                if self._note_failure(host):
+                    break
                 self._backoff(host, attempt, None, penalize=False)
                 continue
             try:
@@ -136,8 +142,21 @@ class HttpClient:
                     now = time.time()
                     self._cache = {k: v for k, v in self._cache.items() if v[0] > now}
             self._on_result(host, limited=False)
+            self._fails[host] = 0
             return data
         raise DataError(f"{method} {host} failed after {retries} tries: {last}")
+
+    def _note_failure(self, host: str) -> bool:
+        """Circuit breaker: 5 network failures in a row -> skip the host for 10 min. True if it just tripped."""
+        with self._lock:
+            n = self._fails.get(host, 0) + 1
+            self._fails[host] = n
+            if n >= 5:
+                self._down_until[host] = time.monotonic() + 600
+                self._fails[host] = 0
+                log.warning("%s keeps failing: skipping it for 10 min", host)
+                return True
+        return False
 
     def get(self, url: str, **kw) -> Any:
         return self.request("GET", url, **kw)

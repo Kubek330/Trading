@@ -70,7 +70,12 @@ class Desk:
         gecko = gecko or GeckoTerminal(self.http, cfg.geckoterminal_url, cfg.coingecko_api_key, self.cg_budget)
         self.jup = jup if jup is not None else (
             JupiterTokens(self.http, cfg.jup_api_key) if cfg.min_organic_score > 0 else None)
-        self.chain = chain or ChainReader(self.http, cfg.solana_rpc_url, self.logger, cfg.helius_api_key)
+        # the whale scout reads hundreds of transactions: give it its own, slower lane so it never queues
+        # in front of the filter's safety checks on the shared RPC
+        self.whale_http = HttpClient(timeout=cfg.http_timeout_s, rpm={
+            "api.mainnet-beta.solana.com": 20, "mainnet.helius-rpc.com": 200, "api.helius.xyz": 60})
+        self.whale_http.stop_event = self.http.stop_event
+        self.chain = chain or ChainReader(self.whale_http, cfg.solana_rpc_url, self.logger, cfg.helius_api_key)
         rpc = rpc or SolanaRPC(self.http, self.chain.rpc_url)
         rug = rug or RugCheck(self.http, cfg.rugcheck_url)
         bundles = bundles or BundleChecker(self.http, cfg.trench_url)
@@ -97,6 +102,8 @@ class Desk:
                                          max_h1_change_pct=1e9, min_liq_mcap_pct=0.0, min_organic_score=0.0),
                                  rpc, rug, bundles, self.logger, jup=None) if cfg.momentum else None
         self._young_cands: list[Candidate] = []
+        self._mom_seeds: list[Candidate] = []
+        self._mom_thread = False
         self.executor = Executor(cfg, self.broker, dex, self.logger)
         self.risk = Risk(cfg, self.logger, dex)
         self.trade_lock = threading.RLock()
@@ -278,7 +285,8 @@ class Desk:
         if not self.momentum:
             return
         pool: dict[str, Candidate] = {}
-        seeds = [*in_window, *self.scout.small, *(self._young_cands or self.scout.young)]
+        seeds = self._mom_seeds or [*in_window, *self.scout.small, *(self._young_cands or self.scout.young)]
+        self._mom_seeds = []                      # consumed; the tracker keeps them
         for c in self.momentum.candidates(seeds):
             pool.setdefault(c.mint, c)
         passed = []
@@ -393,10 +401,12 @@ class Desk:
             self._sniper_arm(out)
         except Exception:
             log.exception("sniper arm failed")
-        try:
-            self._momentum_arm(out, cands)
-        except Exception:
-            log.exception("momentum arm failed")
+        self._mom_seeds = [*cands, *self.scout.small, *(self._young_cands or self.scout.young)]
+        if not self._mom_thread:          # no background loop (tests / `once`): run inline
+            try:
+                self._momentum_arm(out, cands)
+            except Exception:
+                log.exception("momentum arm failed")
         eq = {b: round(self.equity(b)[0], 2) for b in self.cfg.books}
         self.last_cycle = {"ts": time.time(), "secs": round(time.time() - t0, 1), "outcome": out, "equity": eq,
                            "http": dict(self.http.stats), "limited_by_host": dict(getattr(self.http, "limited_by_host", {})),
@@ -431,6 +441,24 @@ class Desk:
                 log.exception("monitor tick failed")
             self.heartbeat = time.time()
             self.stop_event.wait(self.cfg.monitor_interval_s)
+
+    def _momentum_loop(self) -> None:
+        """Momentum re-checks its watchlist every minute, independent of the (slow) full scan."""
+        self.stop_event.wait(20)
+        while not self.stop_event.is_set():
+            t0 = time.time()
+            out: dict = {}
+            try:
+                self._momentum_arm(out, [])
+            except DataError as e:
+                if "shutting down" not in str(e):
+                    log.warning("momentum tick: %s", e)
+            except Exception:
+                log.exception("momentum tick failed")
+            if out:
+                self.logger.event("momentum", "tick", reason="scan", detail=f"{out} | {time.time() - t0:.0f}s",
+                                  data=out, level=logging.DEBUG)
+            self.stop_event.wait(max(5.0, 60 - (time.time() - t0)))
 
     def whale_tick(self) -> None:
         cfg = self.cfg
@@ -495,6 +523,9 @@ class Desk:
         threads = [threading.Thread(target=self._monitor_loop, name="risk-monitor", daemon=True)]
         if c.whale_scout or c.whale_mode:
             threads.append(threading.Thread(target=self._whale_loop, name="whale", daemon=True))
+        if self.momentum:
+            self._mom_thread = True
+            threads.append(threading.Thread(target=self._momentum_loop, name="momentum", daemon=True))
         for t in threads:
             t.start()
         last_report, next_scan = time.time(), 0.0

@@ -898,3 +898,35 @@ def test_momentum_keeps_watching_and_buys_when_a_coin_starts_moving_later(tmp_pa
     assert out.get("momentum_entered") == 1, kills(d, "momentum")
     src = d.logger.positions("open", "momentum")[0]
     assert src.symbol == "MOM0" and p["baseToken"]["address"] in d.momentum.track
+
+
+def test_dead_host_is_skipped_after_repeated_failures(monkeypatch):
+    import urllib.error
+    from memedesk.http import DataError, HttpClient
+    calls = {"n": 0}
+
+    def down(req, timeout=None):
+        calls["n"] += 1
+        raise urllib.error.URLError("name resolution failed")
+
+    monkeypatch.setattr("urllib.request.urlopen", down)
+    monkeypatch.setattr(HttpClient, "_backoff", lambda *a, **k: None)   # no sleeping in the test
+    h = HttpClient(rpm={"dead.test": 6000})
+    for _ in range(2):
+        with pytest.raises(DataError):
+            h.get("https://dead.test/x", retries=4)
+    n = calls["n"]
+    assert n == 5                                         # tripped after 5 consecutive failures
+    with pytest.raises(DataError, match="skipped"):
+        h.get("https://dead.test/y")
+    assert calls["n"] == n                                # no more waiting on a dead host
+
+
+def test_why_lists_momentum_book(tmp_path, capsys, monkeypatch):
+    from memedesk.__main__ import main
+    d, _ = _mom_desk(tmp_path, [mom_pair()])
+    d.scan_cycle()
+    monkeypatch.setenv("DESK_DATA_DIR", str(tmp_path))
+    main(["why", "--env", str(tmp_path / "none.env")])
+    out = capsys.readouterr().out
+    assert "momentum book · 1 bought" in out
