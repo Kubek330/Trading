@@ -81,6 +81,7 @@ class SafetyFacts:
     organic_score: float | None = None
     organic_label: str | None = None
     jupiter_sus: bool = False
+    token2022_risks: list[str] = field(default_factory=list)   # dangerous Token-2022 extensions, if any
 
 
 @dataclass
@@ -182,6 +183,9 @@ class Position:
     sells: list = field(default_factory=list)   # [{ts, qty, price, usd, reason}]
     parent: str = ""                             # momentum re-add: id of the position it adds to
     venue: str = ""                              # dexId at entry (fee schedule for the simulated exit)
+    rule_version: str = ""                       # hash of the trading rules when this position was opened
+    tp_pct: float | None = None                  # AI exit plan: take everything at +tp_pct%
+    deadline_ts: float | None = None             # AI exit plan: thesis expires (sell) at this time
 
     @property
     def pnl_usd(self) -> float | None:

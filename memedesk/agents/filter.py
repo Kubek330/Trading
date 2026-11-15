@@ -77,9 +77,11 @@ class Filter:
     def gather(self, c: Candidate) -> SafetyFacts:
         rep = self._report(c.mint)
         mint_auth = freeze_auth = "UNKNOWN"
+        t22: list[str] = []
         try:
             info = self.rpc.mint_info(c.mint)  # on-chain, authoritative
             mint_auth, freeze_auth = info["mint_authority"], info["freeze_authority"]
+            t22 = list(info.get("token2022_risks") or [])
         except DataError as e:
             log.warning("rpc mint_info %s: %s", c.mint, e)
             if rep:  # fall back to RugCheck's read of the same account
@@ -101,6 +103,7 @@ class Filter:
             top10_pct=rc.top10_pct(rep, self._curve_accounts(c)) if rep else None,
             top_holder_owners=rc.holder_owners(rep) if rep else [],
             rugcheck_score=(rep or {}).get("score_normalised"),
+            token2022_risks=t22,
         )
         self._fallbacks(c, facts)
         return facts
@@ -183,6 +186,8 @@ class Filter:
                 return k
         elif f.freeze_authority:
             return kill("freeze_authority_live", f"freeze authority {f.freeze_authority[:8]}… not revoked")
+        if getattr(f, "token2022_risks", None):
+            return kill("token2022_risk", "Token-2022: " + ", ".join(f.token2022_risks))
         # 4. LP burned or locked (not applicable on a launchpad bonding curve: no LP exists yet)
         if on_bonding_curve(c):
             pass

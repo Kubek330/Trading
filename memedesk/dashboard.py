@@ -140,7 +140,7 @@ def build_state(desk) -> dict:
     agents = {k: {**v, "name": info[k][0], "desc": info[k][1]} for k, v in desk.agents.items()}
     return {
         "now": now, "started": desk.started, "heartbeat": desk.heartbeat, "mode": desk.mode,
-        "profile": cfg.profile,
+        "profile": cfg.profile, "version": getattr(desk, "version", ""),
         "books": {b: _book_view(desk, b, now, curve) for b in cfg.books}, "compare": cmp,
         "curve": curve, "decisions": decisions, "ticker": ticker, "agents": agents,
         "funnel": {**_funnel(L, now - 3600), "watching": L.watch_count()},
@@ -455,7 +455,7 @@ function top_(){
  $("mode").textContent=tab==="pipeline"?"pipeline":S.mode;
  const W=S.whale;
  $("subline").textContent=tab==="pipeline"?`whale pipeline · ${W.backend} · ${W.winners_scanned} winners read · ${W.winners_pending} queued`
-  :`paper trading · ${S.profile} · ${S.wallets.length} whales tracked · ${up_()}`;
+  :`paper trading · ${S.profile} · rules ${esc(S.version||"")} · ${S.wallets.length} whales tracked · ${up_()}`;
  const book=["random","sniper","momentum","ai"].includes(tab)&&S.books[tab]?tab:"scored",b=S.books[book];
  $("hero").hidden=tab==="pipeline";
  const [w,c]=money(b.equity_usd).split(".");$("bal").innerHTML=`${esc(w)}<span class="c">.${esc(c||"00")}</span>`;

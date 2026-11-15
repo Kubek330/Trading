@@ -35,7 +35,7 @@ It is paper only: there is no live trading code in this version. It needs no thi
 |---|---|
 | **whale scout** | Every 30 min it finds Solana tokens that ran **5x+ in the last 7 days**, using GeckoTerminal 4h candles: peak high divided by the lowest low before the peak. For each winner it reads the **first ~200 swaps from chain**. For pump.fun mints it reads the bonding curve (address derived on-device); otherwise it reads the pool. It uses Helius if `HELIUS_API_KEY` is set, otherwise the public RPC with a small per-run budget, and caches every parsed swap. Wallets are scored on how many different winners they bought early, plus the realized SOL PnL from every swap of theirs the desk has seen. It skips bots and MEV (more than 50 trades in an hour, or a buy and sell in one slot), RugCheck creators and insider-flagged wallets, and wallets inactive for 7 days. It keeps the **top 50** in `smart_wallets.txt` and logs every add and drop with its reason. **Whale mode:** it polls the tracked wallets, and when **2+ of them buy the same token within 10 min**, the token goes straight to Filter. It must still pass Filter, Analyst 70+ and Risk. |
 | **scout** | Finds Solana pairs **30m–72h old** with **mcap $300k–$20M**. Pair data comes from DexScreener; discovery also uses DexScreener profiles/boosts and GeckoTerminal's trending and new pools. |
-| **filter** | Kills a coin if: **mint or freeze authority isn't revoked** (read on-chain via RPC) · **LP isn't burned or locked** (≥95%) · **top-10 holders own more than 25%** (pool and AMM vaults excluded) · liquidity is **under 5% of mcap** · **dev holds more than 3%** or has **past rugs** · launch was **more than 10% bundled** · coin is **already up more than 80% in 1h** · coin is marked rugged. If any of this data can't be fetched, the coin is killed. |
+| **filter** | Kills a coin if: **mint or freeze authority isn't revoked** (read on-chain via RPC) · it uses a **dangerous Token-2022 extension** (permanent delegate, transfer hook, transfer fee, non-transferable, frozen by default, pausable) · **LP isn't burned or locked** (≥95%) · **top-10 holders own more than 25%** (pool and AMM vaults excluded) · liquidity is **under 5% of mcap** · **dev holds more than 3%** or has **past rugs** · launch was **more than 10% bundled** · coin is **already up more than 80% in 1h** · coin is marked rugged. If any of this data can't be fetched, the coin is killed. |
 | **analyst** | Scores 0–100 from momentum (20), unique buyers (20), buy/sell ratio (15), holder growth (15), liq/mcap (15) and smart wallets (15). **Only scores of 70 or more pass.** If a data point is missing, that part scores 0. |
 | **random** | The luck baseline. It **skips the Analyst**. Each cycle it draws as many coins as the Analyst passed, uniformly at random from the same cycle's filter survivors, which includes coins the Analyst rejected. They go into a separate $1000 book. |
 | **executor** | Re-quotes the price and sizes the position at **≤8% of that book's equity** (capped in code), ≤1% of pool liquidity and ≤ cash. It fills only with a Risk approval. Paper fills include 2% slippage and 0.5% fees each way. |
@@ -138,7 +138,7 @@ A "buy what's rising" book, the opposite of the strict main desk. It has its own
 - **Spike exit:** the desk records each position's price every monitor tick. If the price jumps 15% or more inside 3 minutes while the position is at least 5% in profit, it sells 75% into the spike and keeps 25% as a runner with its stop at entry or higher. If the runner is all that is left, a spike instead pulls its stop up to 8% under the price.
 - **Sideways exit:** after 20 min without a real run (never more than +10% above entry), if the position is at least +1% in profit after exit slippage and fees, it sells 75% and keeps 25% as a runner with its stop at entry. A sideways position at a loss is not sold early.
 - **Trending lists:** a coin on a GeckoTerminal trending list gets +10 on its momentum score, which can tip a borderline coin but never buys one on its own. Trending lists lag and DexScreener rankings are partly paid boosts, so live buy pressure stays the main signal.
-- **Safety:** hard checks only: mint/freeze authority, LP lock (or bonding curve), not rugged, top-10 ≤ 35%, dev ≤ 10%. **No** analyst score, holder-growth wait or organic score. Since the first live session it does run the fake-volume check (a rug with wash-traded volume cost a whole position).
+- **Safety:** hard checks only: mint/freeze authority, Token-2022 extensions, LP lock (or bonding curve), not rugged, top-10 ≤ 35%, dev ≤ 10%. **No** analyst score, holder-growth wait or organic score. Since the first live session it does run the fake-volume check (a rug with wash-traded volume cost a whole position).
 - **Size:** 5% of the book ($50 of $1000), capped at 5% of pool liquidity or estimated curve reserves. A coin too thin for a $25+ position is skipped (`too_thin`) instead of bought for a few dollars.
 - **Exits:** 5% per trade, stop −12%, at +25% sell 75%, the runner trails 12% below its peak (floor at entry; 8% after a spike), max hold 4 h.
 - **Own loop:** Momentum re-checks its watchlist every 60 s in its own thread, so a slow full scan (filter, analyst, whale scout) never delays it.
@@ -149,11 +149,32 @@ Comparing Momentum with the Desk book on the dashboard shows whether buying ofte
 ## AI book (separate experiment)
 
 An LLM trades its own $1000 paper book. It is off until `GEMINI_API_KEY` is set; a free key comes from aistudio.google.com.
-- **Every minute** it sees the 10 most-traded coins from the momentum watchlist and its own open positions. For each coin it gets live DEX data (age, mcap, liquidity, price changes, buys/sells, volume) and the on-chain safety facts (mint/freeze authority, LP lock, top-10 holders, dev holdings, past rugs, bundles, holder count, Jupiter organic score and suspicious flag).
-- **It decides alone:** which coins to buy, how much (1–8% of the book), and which positions to sell. No filter blocks it; it is told what looks like a scam and has to notice that itself. Every decision is logged with its reason on the AI tab.
-- **Code still does** the simulated fills (same slippage and fees as the other books), the 8% hard cap, an emergency stop at −35% and a 6 h max hold, because the AI only looks once a minute. Set `DESK_AI_STOP_PCT=99` to turn the stop off.
+- **Every 5 minutes** (`DESK_AI_INTERVAL_S=300`; free tiers allow only a few hundred calls a day) it sees the 10 most-traded coins from the momentum watchlist and its own open positions. For each coin it gets live DEX data (age, mcap, liquidity, price changes, buys/sells, volume) and the on-chain safety facts (mint/freeze authority, LP lock, top-10 holders, dev holdings, past rugs, bundles, holder count, Jupiter organic score and suspicious flag, dangerous Token-2022 extensions). It also sees its last 10 closed trades (`DESK_AI_HISTORY`) with their result, so it can learn from them.
+- **It decides alone** which coins to buy and which positions to sell. No filter blocks it; it is told what looks like a scam and has to notice that itself. Every decision is logged with its reason on the AI tab.
+- **Every buy comes with an exit plan** in its JSON reply: `stop_pct` (5–25), `tp_pct` (10–200) and `max_hold_min` (15–360). Code clamps the numbers and enforces them between AI calls: stop loss, `ai_take_profit`, `ai_time_up`.
+- **Code sets the size, not the AI:** 4% of the book when the on-chain facts are clean, 3% when they are fine, 2% when anything is unknown or risky. LLMs are bad at sizing; this keeps one bad call small.
+- **Rate limits:** on HTTP 429 / quota errors it pauses 5, 10, 20 … up to 60 minutes and logs `rate_limited`, instead of hammering the API.
+- **Code still does** the simulated fills (same costs as the other books), the 8% hard cap and a 6 h max hold.
 - **Privacy:** only public coin data is sent; free-tier Gemini may use prompts to improve Google's models.
 - **Switching models later** (e.g. to a paid Claude model) is a change of the client class in `memedesk/sources/llm.py`; the book itself stays the same.
+
+## Measuring the rules (research layer)
+
+Single charts mislead. The desk records enough to judge rules on data:
+- **Rule version.** Every trading setting is hashed into an 8-character version (shown at start, on the dashboard, in each BUY decision and on each position). Keys, paths and the dashboard port don't count. Change a rule → new version; write what changed in `docs/RULES_CHANGELOG.md`. Compare books only within one version.
+- **Price path.** Every monitor tick stores the price and liquidity of each open position (`pricepath` table), so a collapse like a rug can be replayed afterwards.
+- **Candidates with forward returns.** Every accept and reject (filter, analyst, momentum, sniper, AI) is logged with its price (`candidates` table; high-volume prefilter rejects are sampled at 5%). A background loop fills in the return 5 min, 15 min, 1 h, 4 h and 24 h later; a coin that vanished counts as −100%. This shows whether the filters reject the right coins.
+- **Shadow exits.** Each entry is also followed under five other exit rules (`stop12_hold4h`, `stop12_tp25_all`, `stop12_trail20`, `stop12_time30`, `stop20_tp50_all`, same 1% exit cost). Same entries, different exits, so the exit rule can be chosen on numbers.
+
+```bash
+python -m memedesk evaluate            # all time; --hours 24 for the last day
+```
+
+Per book: number of closed trades, mean return with a 95% bootstrap interval, median, profit factor, win rate, share of trades losing 50% or more. Then each book against the random book (permutation test, Holm-corrected for comparing several books), results per rule version, the shadow-exit table and accepted-vs-rejected forward returns. With fewer than 30 trades a book is marked "too few to judge"; aim for 100+.
+
+## Insider exit
+
+When PumpPortal is on, the desk subscribes to live trades of every coin it holds. If the coin's creator sells, or one wallet sells 1% or more of a pump.fun coin's supply in one trade (`DESK_INSIDER_SELL_SUPPLY_PCT`), the position is closed at once (`insider_sell`, "dev/insider sold"). Off with `DESK_INSIDER_EXIT=false`.
 
 ## Does scoring beat luck?
 
@@ -208,6 +229,7 @@ python -m memedesk positions
 python -m memedesk kills -n 100
 python -m memedesk doctor              # which data sources work from this device
 python -m memedesk why                 # top kill reasons per book in the last hour (--hours 6 for more)
+python -m memedesk evaluate            # is any book better than luck? (CI, vs random, shadow exits)
 python -m memedesk dashboard           # dashboard over saved data, no trading
 sqlite3 data/desk_paper.db "select agent, book, reason, count(*) from kills group by 1,2,3 order by 4 desc"
 ```
@@ -229,4 +251,4 @@ sqlite3 data/desk_paper.db "select agent, book, reason, count(*) from kills grou
 pip install pytest && python -m pytest -q
 ```
 
-There are 87 offline tests. They cover every filter kill rule (including top-10 holders with the pool vault excluded), the 8% cap, the −15% stop, the +35% partial sell, the runner trailing stop and its floor at entry, the 48h max hold, the Random arm's matched draws from filter survivors, handoff enforcement, the comparison verdicts, the dashboard server, HTTP backoff and caching, a check that only the standard library is imported, and Whale Scout: winner detection, wallet scoring/exclusions/add-drop reasons, whale-mode signals going through Filter/Analyst/Risk, both transaction parsers, signature paging, and pump.fun bonding-curve derivation.
+There are 116 offline tests. They cover every filter kill rule (including top-10 holders with the pool vault excluded), the 8% cap, the −15% stop, the +35% partial sell, the runner trailing stop and its floor at entry, the 48h max hold, the Random arm's matched draws from filter survivors, handoff enforcement, the comparison verdicts, the dashboard server, HTTP backoff and caching, a check that only the standard library is imported, and Whale Scout: winner detection, wallet scoring/exclusions/add-drop reasons, whale-mode signals going through Filter/Analyst/Risk, both transaction parsers, signature paging, and pump.fun bonding-curve derivation. Newer tests cover the momentum and AI books, realistic costs, Token-2022 extension checks, insider-sell exits, rule versions, candidate forward returns, shadow exits and the `evaluate` statistics.

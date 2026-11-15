@@ -65,7 +65,7 @@ class Executor:
 
         pct = min(self.cfg.rules(book).position_pct, HARD_MAX_POSITION_PCT)
         if book == "ai":
-            pct = min(float(getattr(pick, "size_pct", 3.0)), HARD_MAX_POSITION_PCT)   # the AI picks its size
+            pct = min(float(getattr(pick, "size_pct", 3.0)), HARD_MAX_POSITION_PCT)   # AI book: size set by code from the safety facts (2-4%)
         from .filter import BONDING_CURVE_DEXES, curve_liq_estimate, on_bonding_curve
         if (q["pair"].get("dexId") or "").lower() in BONDING_CURVE_DEXES or on_bonding_curve(c):
             liq = max(liq, curve_liq_estimate(float(q.get("mcap") or c.mcap or 0)))

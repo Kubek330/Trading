@@ -212,11 +212,15 @@ class Config:
     ai: bool = True                          # active when GEMINI_API_KEY is set
     gemini_api_key: str = ""                 # free key: aistudio.google.com -> Get API key
     ai_model: str = ""                       # empty = gemini-2.5-flash, or the newest flash model on the key
-    ai_interval_s: float = 60.0              # one LLM call per minute (fits free-tier limits)
+    ai_interval_s: float = 300.0             # one LLM call per 5 min (free tiers allow only a few hundred a day)
+    ai_history: int = 10                     # last closed AI trades shown back to the AI
     ai_candidates: int = 10                  # most-traded coins shown to the AI per call
     ai_stop_pct: float = 35.0                # emergency stop only (the AI looks once a minute); 99 = off
     ai_max_hold_h: float = 6.0
     ai_max_open: int = 6
+    # ---- insider exit: sell when the creator dumps or one wallet sells a big slice (PumpPortal trades) ----
+    insider_exit: bool = True
+    insider_sell_supply_pct: float = 1.0     # one sell of >= this % of supply (pump.fun 1B supply) = exit
 
     # ---- executor ---------------------------------------------------------
     position_pct: float = 8.0                # of the book's equity; clamped to 8

@@ -16,6 +16,32 @@ from ..http import DataError, HttpClient
 LIVE_TTL_S = 600.0
 
 
+def token2022_risks(info: dict) -> list[str]:
+    """Token-2022 extensions that let someone take, block or tax holders' tokens. Metadata-type extensions
+    (used by pump.fun's newer mints) are harmless and ignored."""
+    out = []
+    for ext in info.get("extensions") or []:
+        if not isinstance(ext, dict):
+            continue
+        name, st = ext.get("extension", ""), ext.get("state") or {}
+        if name == "permanentDelegate" and st.get("delegate"):
+            out.append("permanent_delegate")          # can move or burn anyone's tokens
+        elif name == "transferHook" and st.get("programId"):
+            out.append("transfer_hook")               # custom code runs on every transfer (can block sells)
+        elif name == "nonTransferable":
+            out.append("non_transferable")
+        elif name == "transferFeeConfig":
+            bps = max(int(((st.get(k) or {}).get("transferFeeBasisPoints") or 0))
+                      for k in ("olderTransferFee", "newerTransferFee"))
+            if bps > 0:
+                out.append(f"transfer_fee_{bps / 100:g}%")
+        elif name == "defaultAccountState" and str(st.get("accountState", "")).lower() == "frozen":
+            out.append("default_frozen")
+        elif name in ("pausableConfig", "pausable"):
+            out.append("pausable")
+    return out
+
+
 class SolanaRPC:
     def __init__(self, http: HttpClient, url: str):
         self.http, self.url = http, url
@@ -48,6 +74,7 @@ class SolanaRPC:
             "freeze_authority": info.get("freezeAuthority"),
             "supply": int(info.get("supply", 0)),
             "decimals": int(info.get("decimals", 0)),
+            "token2022_risks": token2022_risks(info),
         }
         revoked = out["mint_authority"] is None and out["freeze_authority"] is None
         with self._lock:

@@ -8,6 +8,7 @@
   python -m memedesk kills       # most recent kills with reasons
   python -m memedesk doctor      # test every data source from this device
   python -m memedesk why         # why nothing gets bought: top kill reasons per book (last --hours, default 1)
+  python -m memedesk evaluate    # per book: mean with 95% CI, vs random, per rule version, shadow exits
 """
 from __future__ import annotations
 
@@ -22,7 +23,8 @@ from .config import Config
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="memedesk")
-    ap.add_argument("cmd", choices=["run", "once", "dashboard", "report", "positions", "kills", "doctor", "why"])
+    ap.add_argument("cmd", choices=["run", "once", "dashboard", "report", "positions", "kills", "doctor", "why",
+                                       "evaluate"])
     ap.add_argument("--env", default=".env")
     ap.add_argument("--hours", type=float, default=None)
     ap.add_argument("-n", type=int, default=40)
@@ -36,6 +38,16 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "doctor":
         from .doctor import run as doctor
         return doctor(cfg)
+
+    if args.cmd == "evaluate":
+        from .agents.logger import Logger
+        from .evaluate import run as evaluate
+        from .research import Research, rule_version
+        lg = Logger(cfg.data_dir)
+        Research(lg, cfg, rule_version(cfg))          # makes sure the research tables exist
+        print(f"current rules version: {rule_version(cfg)}")
+        evaluate(lg, cfg.books, args.hours)
+        return 0
 
     if args.cmd == "why":
         from .agents.logger import Logger

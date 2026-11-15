@@ -33,6 +33,7 @@ from .broker.paper import PaperBroker
 from .config import Config
 from .http import DataError, HttpClient
 from .models import Candidate, Kill, RandomPick, SafetyFacts, Scorecard, Vetted
+from .research import Research, rule_version
 from .sources.bundles import BundleChecker
 from .sources.chain import ChainReader
 from .sources.dexscreener import DexScreener
@@ -97,6 +98,7 @@ class Desk:
         if cfg.pumpportal:
             from .sources.pumpportal import PumpPortalFeed
             self.pumpportal = PumpPortalFeed()
+            self.pumpportal.big_sell_pct = cfg.insider_sell_supply_pct
             self.scout.feed = self.pumpportal
         self.filter = Filter(cfg, rpc, rug, bundles, self.logger, jup=self.jup)
         self.analyst = Analyst(cfg, gecko, self.logger, self.grok, smart_wallets)
@@ -132,6 +134,11 @@ class Desk:
         else:
             risk_dex = dex                      # injected (tests): use it as-is
         self.risk = Risk(cfg, self.logger, risk_dex)
+        self.version = rule_version(cfg)
+        self.research = Research(self.logger, cfg, self.version)
+        self.risk.research = self.research
+        self.risk.feed = self.pumpportal if cfg.insider_exit else None
+        self._cands: dict[str, Candidate] = {}     # last-seen candidate per mint (for the candidate log)
         self.trade_lock = threading.RLock()
         self.stop_event = getattr(self.http, "stop_event", None) or threading.Event()
         self.whale_queue: queue.Queue[Candidate] = queue.Queue()
@@ -184,12 +191,29 @@ class Desk:
 
     def _kill(self, k: Kill) -> None:
         self.logger.kill(k, self.cfg.kill_cooldown_min)
+        c = self._cands.get(k.mint)
+        if c is not None and k.agent != "scout":
+            self._cand(k.book or "", k.agent, c, "reject", k.reason)
 
     def _blocked(self, mint: str, book: str) -> bool:
         return self.logger.on_cooldown(mint, book) or any(
             p.mint == mint for p in self.logger.positions("open", book))
 
+    def _remember(self, c: Candidate) -> None:
+        self._cands[c.mint] = c
+        if len(self._cands) > 5000:
+            for m in list(self._cands)[:1000]:
+                del self._cands[m]
+
+    def _cand(self, book: str, stage: str, c: Candidate, decision: str, reason: str = "", sample: float = 1.0):
+        """Research log: every accept/reject with its price, so forward returns can be measured later."""
+        try:
+            self.research.log_candidate(book, stage, c, decision, reason, sample)
+        except Exception:
+            log.exception("candidate log failed")
+
     def _watch(self, c: Candidate) -> None:
+        self._remember(c)
         self.watch[c.mint] = {"mint": c.mint, "symbol": c.symbol, "h1": c.price_change.get("h1"),
                               "pair": c.pair_address, "image": c.image, "mcap": c.mcap, "ts": time.time()}
         if len(self.watch) > 40:
@@ -211,6 +235,7 @@ class Desk:
             self._kill(v)
             return None
         f = v.facts
+        self._cand("", "filter", c, "pass")
         L.event("filter", "pass", c.mint, c.symbol, "safe",
                 f"top10 {f.top10_pct:.0f}% · dev {f.dev_pct:.1f}% · LP {f.lp_locked_pct:.0f}% locked"
                 if None not in (f.top10_pct, f.dev_pct, f.lp_locked_pct) else "", level=logging.DEBUG)
@@ -249,12 +274,24 @@ class Desk:
             except Exception as e:
                 self._kill(Kill("executor", c.mint, c.symbol, "fill_failed", str(e), cooldown_min=15, book=book))
                 return "executor"
+            pos.rule_version = self.version
+            if book == "ai":
+                pos.tp_pct = getattr(pick, "tp_pct", None)
+                hold = getattr(pick, "max_hold_min", None)
+                pos.deadline_ts = pos.opened_ts + hold * 60 if hold else None
+            L.save_position(pos)
+        self._cand(book, "entry", c, "accept", "addon" if getattr(pick, "addon_of", "") else "")
+        try:
+            self.research.start_shadows(pos)
+        except Exception:
+            log.exception("shadow start failed")
         if book == "random":
             why = f"random pick {pick.index + 1}/{pick.pool_size}"
         elif book == "sniper":
             why = f"snipe · {c.age_h * 60:.0f}m old · momentum {pick.momentum:.0f}"
         elif book == "ai":
-            why = f"AI {pick.size_pct:g}% · {pick.reason}"
+            why = (f"AI {pick.size_pct:g}% · stop -{pick.stop_pct:g}% · tp +{pick.tp_pct:g}% · "
+                   f"{pick.max_hold_min:g}m · {pick.reason}")
         elif book == "momentum" and getattr(pick, "addon_of", ""):
             why = (f"re-add · still rising after our sell · {c.price_change.get('m5', 0):+.0f}% 5m · "
                    f"momentum {pick.momentum:.0f}")
@@ -265,12 +302,13 @@ class Desk:
             why = (f"{c.reason} · score {pos.score:.0f}" if c.reason else f"score {pos.score:.0f}")
         origin = "whale" if c.trail[0] == "whale_scout" else "pipeline"
         msg = (f"ENTRY {pos.symbol} [{book}] {why} ${pos.cost_usd:.2f} @ {pos.entry_price:.8g} "
-               f"stop {pos.stop_price:.8g} (-{self.cfg.rules(book).stop_pct:g}%)")
+               f"stop {pos.stop_price:.8g} (-{a.stop_pct:g}%) · rules {self.version}")
         L.event("executor", "entry", pos.mint, pos.symbol, book, msg,
                 data={"position": pos.to_dict(), "components": getattr(pick, "components", None),
                       "grok": getattr(pick, "grok_note", ""), "origin": origin}, level=logging.WARNING)
         L.event("executor", "decision", pos.mint, pos.symbol, "BUY", why,
-                data={"side": "BUY", "book": book, "reason": why, "usd": pos.cost_usd, "origin": origin})
+                data={"side": "BUY", "book": book, "reason": why, "usd": pos.cost_usd, "origin": origin,
+                      "version": self.version})
         note = getattr(pick, "grok_note", "")
         L.notify(f"[paper] {msg}\nhttps://dexscreener.com/solana/{pos.pair_address}" + (f"\ngrok: {note}" if note else ""))
         return "entered"
@@ -292,8 +330,10 @@ class Desk:
                 continue
             if k:
                 self.logger.kill(k, self.cfg.kill_cooldown_min, quiet=True)   # in the DB, not on the console
+                self._cand("sniper", "prefilter", c, "reject", k.reason, sample=0.05)
                 out["sniper_skips"] = out.get("sniper_skips", 0) + 1
                 continue
+            self._remember(c)
             self.logger.handoff("sniper", "filter", c.mint, c.symbol)
             self._watch(c)
             v = self.sniper_filter.run(c)
@@ -318,6 +358,8 @@ class Desk:
         if not self.ai:
             return {}
         cfg, now = self.cfg, time.time()
+        if self.ai.rate_limited(now):
+            return {"ai": "waiting after rate limit"}
         held = self.logger.positions("open", "ai")
         held_mints = {p.mint for p in held}
         pool = self._mom_pool or {c.mint: c for c in [*self.scout.small, *self.scout.young]}
@@ -341,8 +383,25 @@ class Desk:
                               "held_min": round((now - p.opened_ts) / 60)})
         if not payload and not positions:
             return {"ai": "nothing to look at"}
+        closed = sorted((p for p in self.logger.positions("closed", "ai")),
+                        key=lambda p: p.exit_ts or 0, reverse=True)[: cfg.ai_history]
+        history = [{"symbol": p.symbol, "pnl_pct": round(p.pnl_pct or 0, 1), "exit": p.exit_reason,
+                    "held_min": round(((p.exit_ts or now) - p.opened_ts) / 60),
+                    "peak_pct": round((p.peak_price / p.entry_price - 1) * 100, 1) if p.entry_price else None}
+                   for p in closed]
+        for c in ranked:
+            self._remember(c)
         with self.working("ai"):
-            d = self.ai.decide(payload, positions)
+            try:
+                d = self.ai.decide(payload, positions, history)
+            except DataError as e:
+                wait = self.ai.note_error(str(e), now)
+                if wait:
+                    self.logger.event("ai", "error", reason="rate_limited",
+                                      detail=f"LLM rate limit / quota: pausing {wait / 60:.0f} min",
+                                      level=logging.WARNING)
+                    return {"ai": "rate limited"}
+                raise
         out = {"buys": 0, "sells": 0}
         for s in d["sells"]:
             p = next((x for x in held if x.id == s["id"]), None)
@@ -357,10 +416,13 @@ class Desk:
             c = by_mint.get(b["mint"])
             if c is None:
                 continue                                  # only coins it was shown
-            pick = self.ai.pick(c, facts.get(c.mint) or SafetyFacts(*([None] * 9)), b.get("size_pct"),
-                                b.get("reason", ""))
+            pick = self.ai.pick(c, facts.get(c.mint) or SafetyFacts(*([None] * 9)), b, b.get("reason", ""))
             res = self.enter(pick)
             out["buys"] += res == "entered"
+        bought = {b.get("mint") for b in d["buys"]}
+        for c in ranked:
+            if c.mint not in bought:
+                self._cand("ai", "shown", c, "reject", "ai_passed")
         self.logger.event("ai", "decide", reason=f"{len(payload)} shown",
                           detail=f"{len(d['buys'])} buy / {len(d['sells'])} sell ideas · {out}", data=out)
         return out
@@ -450,6 +512,7 @@ class Desk:
                     continue
                 if k:
                     self.logger.kill(k, self.cfg.kill_cooldown_min, quiet=True)
+                    self._cand("momentum", "prefilter", c, "reject", k.reason, sample=0.05)
                     out["momentum_skips"] = out.get("momentum_skips", 0) + 1
                     continue
                 passed.append(c)
@@ -468,6 +531,7 @@ class Desk:
                 self.logger.kill(Kill("momentum", c.mint, c.symbol, "weak_momentum",
                                       f"momentum {momentum_score(c):.0f} < {cfg.mom_min_quality:g}",
                                       cooldown_min=3, book="momentum"), cfg.kill_cooldown_min, quiet=True)
+                self._cand("momentum", "quality", c, "reject", "weak_momentum", sample=0.25)
         for c in ranked:
             if entered >= slots or checked >= slots + 4 or self.stop_event.is_set():
                 break
@@ -481,6 +545,7 @@ class Desk:
                 self.logger.kill(Kill("momentum", c.mint, c.symbol, "too_many_tries",
                                       f"{len(tries)} entries in 24h", cooldown_min=120, book="momentum"),
                                  cfg.kill_cooldown_min, quiet=True)
+                self._cand("momentum", "tries", c, "reject", "too_many_tries")
                 continue
             v = self.mom_filter.run(c)
             if isinstance(v, Kill):
@@ -613,6 +678,24 @@ class Desk:
             self.heartbeat = time.time()
             self.stop_event.wait(self.cfg.monitor_interval_s)
 
+    def research_tick(self) -> int:
+        """Fill forward returns (5m / 15m / 1h / 4h / 24h) of logged candidates."""
+        def prices(mints):
+            try:
+                return self.dex.prices(set(mints))
+            except DataError:
+                return {}
+        return self.research.follow_up(prices)
+
+    def _research_loop(self) -> None:
+        self.stop_event.wait(60)
+        while not self.stop_event.is_set():
+            try:
+                self.research_tick()
+            except Exception:
+                log.exception("research follow-up failed")
+            self.stop_event.wait(60)
+
     def _momentum_loop(self) -> None:
         """Momentum re-checks its watchlist every minute, independent of the (slow) full scan."""
         self.stop_event.wait(20)
@@ -688,10 +771,11 @@ class Desk:
                   f"{c.position_pct:g}%/trade | stop -{c.stop_pct:g}% | +{c.tp_trigger_pct:g}% sell "
                   f"{c.tp_sell_pct:g}% | runner trails {c.runner_trail_pct:g}% (floor entry) | "
                   f"max {c.max_hold_h:g}h | min score {c.min_score:g} | whale scout "
-                  f"{'on' if c.whale_scout else 'off'} via {self.chain.backend}")
-        self.logger.event("desk", "start", detail=banner, level=logging.WARNING)
+                  f"{'on' if c.whale_scout else 'off'} via {self.chain.backend} | rules {self.version}")
+        self.logger.event("desk", "start", detail=banner, data={"version": self.version}, level=logging.WARNING)
         self.logger.notify(banner)
-        threads = [threading.Thread(target=self._monitor_loop, name="risk-monitor", daemon=True)]
+        threads = [threading.Thread(target=self._monitor_loop, name="risk-monitor", daemon=True),
+                   threading.Thread(target=self._research_loop, name="research", daemon=True)]
         if c.whale_scout or c.whale_mode:
             threads.append(threading.Thread(target=self._whale_loop, name="whale", daemon=True))
         if self.pumpportal is not None:

@@ -85,13 +85,14 @@ class FakeGecko:
 
 
 class FakeRPC:
-    def __init__(self, mint_auth=None, freeze_auth=None, fail=False):
-        self.m, self.f, self.fail = mint_auth, freeze_auth, fail
+    def __init__(self, mint_auth=None, freeze_auth=None, fail=False, t22=None):
+        self.m, self.f, self.fail, self.t22 = mint_auth, freeze_auth, fail, t22 or []
 
     def mint_info(self, mint):
         if self.fail:
             raise DataError("rpc down")
-        return {"mint_authority": self.m, "freeze_authority": self.f, "supply": 10**9, "decimals": 6}
+        return {"mint_authority": self.m, "freeze_authority": self.f, "supply": 10**9, "decimals": 6,
+                "token2022_risks": list(self.t22)}
 
 
 class FakeRug:
@@ -1158,7 +1159,8 @@ def _ai_desk(tmp_path, pairs, llm, **kw):
 
 def test_ai_buys_what_it_chooses_even_without_filters(tmp_path):
     p = mom_pair(m5=-4)                                                 # momentum would never buy this
-    llm = FakeLLM(lambda s: {"buys": [{"mint": s["candidates"][0]["mint"], "size_pct": 6,
+    llm = FakeLLM(lambda s: {"buys": [{"mint": s["candidates"][0]["mint"], "size_pct": 6, "stop_pct": 60,
+                                       "tp_pct": 30, "max_hold_min": 45,
                                        "reason": "I like the holder spread"}], "sells": []})
     d, _ = _ai_desk(tmp_path, [p], llm, rpc=FakeRPC(mint_auth="StillLive1"))   # unsafe: mint authority live
     d.scan_cycle()
@@ -1166,10 +1168,13 @@ def test_ai_buys_what_it_chooses_even_without_filters(tmp_path):
     shown = llm.seen[0]["candidates"][0]
     assert shown["safety"]["mint_authority_revoked"] is False           # it was told...
     [pos] = d.logger.positions("open", "ai")                              # ...and decided anyway
-    assert pos.cost_usd == pytest.approx(60.0)
+    assert pos.cost_usd == pytest.approx(20.0)                            # code sizes: 2% (mint authority live)
+    assert pos.stop_price == pytest.approx(pos.entry_price * 0.75)        # its stop, clamped to 25%
+    assert pos.tp_pct == 30 and pos.deadline_ts == pytest.approx(pos.opened_ts + 45 * 60)
+    assert pos.rule_version == d.version
     why = d.logger.db.execute("SELECT detail FROM events WHERE kind='decision' AND reason='BUY' "
                               "AND data LIKE '%\"book\":\"ai\"%'").fetchone()[0]
-    assert why == "AI 6% · I like the holder spread"
+    assert why == "AI 2% · stop -25% · tp +30% · 45m · I like the holder spread"
 
 
 def test_ai_sells_on_its_own_and_ignores_made_up_mints(tmp_path):

@@ -26,7 +26,8 @@ EXIT_LABELS = {"stop_loss": "stop loss", "take_profit": "take profit 75%", "runn
                "pool_vanished": "pool vanished", "dump_exit": "dump detected", "stale_rotate": "rotated out (stalled)",
                "chop_take_profit": "small profit, sideways",
                "spike_take_profit": "sold into spike",
-               "ai_sell": "AI sold"}
+               "ai_sell": "AI sold", "ai_take_profit": "AI take profit", "ai_time_up": "AI time limit",
+               "insider_sell": "dev/insider sold"}
 PRICE_MISS_LIMIT = 20  # consecutive ticks with no price => pool treated as gone
 
 
@@ -128,6 +129,15 @@ def stale_check(p: Position, price: float, pair: dict, now: float, cfg: Config):
     return None
 
 
+def ai_plan_check(p: Position, price: float, now: float):
+    """The AI's own exit plan, enforced between its calls: take-profit and time limit (stop is the stop price)."""
+    if p.tp_pct and price >= p.entry_price * (1 + p.tp_pct / 100):
+        return ("exit", 1.0, "ai_take_profit")
+    if p.deadline_ts and now >= p.deadline_ts:
+        return ("exit", 1.0, "ai_time_up")
+    return None
+
+
 class Risk:
     name = "risk"
 
@@ -136,6 +146,8 @@ class Risk:
         self.quotes: dict[str, dict] = {}   # mint -> latest {price, mcap, h1, ts} for the dashboard
         self.stop_strikes: dict[str, int] = {}
         self.history: dict[str, deque] = {}  # position id -> recent (ts, price) samples (every monitor tick)
+        self.research = None                 # measurement layer (price paths, shadow exits); set by the desk
+        self.feed = None                     # PumpPortal feed for insider-sell alerts; set by the desk
 
     # ---- pre-trade --------------------------------------------------------
     def halted(self, book: str, equity_usd: float) -> str | None:
@@ -168,6 +180,8 @@ class Risk:
         if t.size_usd > cap + 1e-6:
             return kill("oversize", f"${t.size_usd:.2f} > 8% cap ${cap:.2f}")
         stop = self.cfg.mom_readd_stop_pct if addon else rules.stop_pct
+        if t.book == "ai" and getattr(t.pick, "stop_pct", None):
+            stop = float(t.pick.stop_pct)      # the AI's own exit plan (clamped 5-25% by code)
         return RiskApproval(ticket_id=t.id, stop_pct=stop, max_size_usd=min(cap, t.size_usd))
 
     # ---- live management --------------------------------------------------
@@ -191,14 +205,29 @@ class Risk:
 
     def monitor(self, executor, lock) -> None:
         open_pos = self.logger.positions("open")
-        if not open_pos:
+        shadow = self.research.shadow_mints() if self.research else set()
+        if self.feed is not None:
+            try:
+                self.feed.watch({p.mint: p.creator for p in open_pos})
+            except Exception:
+                log.exception("insider watch update failed")
+        if not open_pos and not shadow:
             return
         try:
-            quotes = self.dex.prices({p.mint for p in open_pos})
+            quotes = self.dex.prices({p.mint for p in open_pos} | shadow)
         except DataError as e:
             log.warning("monitor price fetch failed: %s", e)
             return
         now = time.time()
+        if self.research:
+            try:
+                self.research.update_shadows(quotes, now)
+                for p in open_pos:
+                    q = quotes.get(p.mint)
+                    if q and q.get("price"):
+                        self.research.record_price(p.id, q["price"], q.get("liq"))
+            except Exception:
+                log.exception("research update failed")
         for m, q in quotes.items():
             self.quotes[m] = {"price": q["price"], "mcap": q.get("mcap"), "h1": q.get("h1"),
                               "symbol": q.get("symbol", ""), "image": q.get("image", ""), "ts": now}
@@ -228,11 +257,22 @@ class Risk:
                     action = chop_check(p, price, now, self.cfg)
                 if action is None and p.book == "momentum":
                     action = stale_check(p, price, q.get("pair") or {}, now, self.cfg)
+                if action is None and p.book == "ai":
+                    action = ai_plan_check(p, price, now)
+                if action is None and self.feed is not None:
+                    action = self._insider_check(p)
                 for e in events:
                     self.logger.event(self.name, "stop_move", p.mint, p.symbol, p.book, e)
                 self.logger.save_position(p)
             if action:
                 self._act(executor, lock, p, action, price, now)
+
+    def _insider_check(self, p: Position):
+        alert = self.feed.alert_for(p.mint, since=p.opened_ts)
+        if not alert:
+            return None
+        self.logger.event(self.name, "stop_move", p.mint, p.symbol, p.book, f"insider sell: {alert}")
+        return ("exit", 1.0, "insider_sell")
 
     def _act(self, executor, lock, p: Position, action, price: float, now: float) -> None:
         kind, frac, reason = action
