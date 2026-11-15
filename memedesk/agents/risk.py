@@ -11,6 +11,7 @@ every open position in both books with the same exits:
 from __future__ import annotations
 
 import logging
+from collections import deque
 import time
 from datetime import datetime, timezone
 
@@ -23,7 +24,8 @@ log = logging.getLogger("memedesk.risk")
 EXIT_LABELS = {"stop_loss": "stop loss", "take_profit": "take profit 75%", "runner_trail": "trail exit",
                "runner_breakeven": "breakeven exit", "max_hold": "48h max hold", "liq_crash": "liquidity crash",
                "pool_vanished": "pool vanished", "dump_exit": "dump detected", "stale_rotate": "rotated out (stalled)",
-               "chop_take_profit": "small profit, sideways"}
+               "chop_take_profit": "small profit, sideways",
+               "spike_take_profit": "sold into spike"}
 PRICE_MISS_LIMIT = 20  # consecutive ticks with no price => pool treated as gone
 
 
@@ -74,6 +76,27 @@ def dump_check(p: Position, price: float, pair: dict, cfg: Config):
     return None
 
 
+def spike_check(p: Position, price: float, hist, now: float, cfg: Config):
+    """Momentum book: a vertical move (+15% inside 3 min) is where holders take profit. Sell most of it into
+    the spike; if only the runner is left, pull its stop up tight under the price instead.
+    Returns (action | None, event text | None)."""
+    window = [px for ts, px in hist if now - ts <= cfg.mom_spike_window_s]
+    if len(window) < 2 or min(window) <= 0:
+        return None, None
+    jump = (price / min(window) - 1) * 100
+    if jump < cfg.mom_spike_pct:
+        return None, None
+    if not p.tp_taken:
+        if (price / p.entry_price - 1) * 100 >= cfg.mom_spike_min_pnl_pct:
+            return ("partial", cfg.mom_spike_sell_pct / 100, "spike_take_profit"), None
+        return None, None
+    tight = price * (1 - cfg.mom_spike_runner_stop_pct / 100)
+    if tight > p.stop_price:
+        p.stop_price = tight
+        return None, f"spike +{jump:.0f}% in {cfg.mom_spike_window_s / 60:.0f}m: runner stop -> {tight:.8g}"
+    return None, None
+
+
 def chop_check(p: Position, price: float, now: float, cfg: Config):
     """Momentum book: a position that has only drifted a few % for 20+ min and is now slightly in profit
     (after exit slippage and fee) sells most of it and keeps a runner floored at entry."""
@@ -110,6 +133,7 @@ class Risk:
     def __init__(self, cfg: Config, logger, dex):
         self.cfg, self.logger, self.dex = cfg, logger, dex
         self.quotes: dict[str, dict] = {}   # mint -> latest {price, mcap, h1, ts} for the dashboard
+        self.history: dict[str, deque] = {}  # position id -> recent (ts, price) samples (every monitor tick)
 
     # ---- pre-trade --------------------------------------------------------
     def halted(self, book: str, equity_usd: float) -> str | None:
@@ -170,6 +194,12 @@ class Risk:
                 action, events = step(p, price, q["liq"], now, self.cfg.rules(p.book))
                 if action is None:
                     action = dump_check(p, price, q.get("pair") or {}, self.cfg)
+                hist = self.history.setdefault(p.id, deque(maxlen=200))
+                hist.append((now, price))
+                if action is None and p.book == "momentum":
+                    action, ev = spike_check(p, price, hist, now, self.cfg)
+                    if ev:
+                        self.logger.event(self.name, "stop_move", p.mint, p.symbol, p.book, ev)
                 if action is None and p.book == "momentum":
                     action = chop_check(p, price, now, self.cfg)
                 if action is None and p.book == "momentum":
@@ -198,6 +228,7 @@ class Risk:
         leg_pnl = (p.realized_usd - before) - cost_part
         label = (f"take profit {self.cfg.rules(p.book).tp_sell_pct:g}%" if reason == "take_profit"
                  else f"small profit {frac * 100:.0f}%, sideways" if reason == "chop_take_profit"
+                 else f"sold {frac * 100:.0f}% into spike" if reason == "spike_take_profit"
                  else EXIT_LABELS.get(reason, reason))
         self.logger.event(self.name, "decision", p.mint, p.symbol, "SELL", f"{label} {leg_pnl:+.2f}$",
                           data={"side": "SELL", "book": p.book, "reason": f"{label} {'+' if leg_pnl >= 0 else '−'}${abs(leg_pnl):.2f}",
@@ -214,5 +245,6 @@ class Risk:
                           data={"position": p.to_dict()}, level=logging.WARNING)
         self.logger.notify(msg)
         self.logger.set_cooldown(p.mint, self.cfg.reentry_cooldown_h * 60, self.name, "reentry", book=p.book)
+        self.history.pop(p.id, None)
         if reason in ("liq_crash", "pool_vanished") and p.creator:
             self.logger.put(f"rugger:{p.creator}", {"mint": p.mint, "ts": now})

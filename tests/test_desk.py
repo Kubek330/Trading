@@ -997,3 +997,33 @@ def test_websocket_client_against_local_server():
     assert feed.drain() == [("A" * 40 + "pump", "pp_new")]
     feed.handle({"mint": "B" * 44, "txType": "migrate", "pool": "pump-amm"})
     assert feed.drain() == [("B" * 44, "pp_migrated")]
+
+
+def test_momentum_sells_into_a_spike_and_tightens_runner(tmp_path):
+    from collections import deque
+    from memedesk.agents.risk import spike_check
+    cfg = Config()
+    now = time.time()
+    p = Position(id="s", book="momentum", mint="m", symbol="M", pair_address="p", entry_price=1.0, initial_qty=100,
+                 qty=100, cost_usd=100, stop_price=0.88, peak_price=1.0, entry_liq_usd=10_000, score=None,
+                 opened_ts=now - 600)
+    hist = deque([(now - 150, 1.02), (now - 90, 1.08), (now - 30, 1.15)])
+    assert spike_check(p, 1.20, hist, now, cfg)[0] == ("partial", 0.75, "spike_take_profit")   # +17.6% in 2.5m
+    slow = deque([(now - 900, 1.02), (now - 60, 1.15)])
+    assert spike_check(p, 1.20, slow, now, cfg)[0] is None            # a 15-minute climb is not a spike
+    p.tp_taken, p.stop_price = True, 1.0
+    action, ev = spike_check(p, 1.40, deque([(now - 100, 1.18), (now - 5, 1.30)]), now, cfg)
+    assert action is None and p.stop_price == pytest.approx(1.40 * 0.92) and "runner stop" in ev
+
+
+def test_momentum_spike_end_to_end(tmp_path):
+    d, dex = _mom_desk(tmp_path, [mom_pair()])
+    d.scan_cycle()
+    [p] = d.logger.positions("open", "momentum")
+    d.risk.history[p.id] = __import__("collections").deque([(time.time() - 100, p.entry_price * 1.0)])
+    dex.set_price(p.mint, p.entry_price * 1.18 / 1.0)                    # +18% within ~2 min
+    d.risk.monitor(d.executor, threading.RLock())
+    [p2] = d.logger.positions("open", "momentum")
+    assert p2.tp_taken and p2.qty == pytest.approx(p2.initial_qty * 0.25)
+    sell = d.logger.db.execute("SELECT detail FROM events WHERE kind='decision' AND reason='SELL'").fetchone()[0]
+    assert sell.startswith("sold 75% into spike")

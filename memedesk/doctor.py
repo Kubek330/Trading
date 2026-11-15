@@ -42,13 +42,13 @@ def checks(cfg: Config):
 
 
 def run(cfg: Config) -> int:
-    http = HttpClient(timeout=15, max_backoff_s=3)
+    http = HttpClient(timeout=8, max_backoff_s=2)
     bad_required = 0
     print(f"memedesk doctor · profile={cfg.profile} · min score {cfg.min_score:g}\n")
     for name, role, method, url, body, headers, ok in checks(cfg):
         t0 = time.time()
         try:
-            data = http.request(method, url, json=body, headers=headers, retries=2)
+            data = http.request(method, url, json=body, headers=headers, retries=1)
             print(f"  ✓ {name:24} {time.time() - t0:5.1f}s  {ok(data)}")
         except Exception as e:  # report every failure, keep going
             msg = str(e).replace(cfg.helius_api_key or "\0", "***")
