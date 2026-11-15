@@ -56,10 +56,10 @@ class GeckoTerminal:
         self.cg_key, self.budget = cg_key, budget
         self.fallback_calls = 0
 
-    def _get(self, path: str, params: dict | None = None, cache_ttl: float = 0.0):
+    def _get(self, path: str, params: dict | None = None, cache_ttl: float = 0.0, retries: int | None = None):
         try:
             return self.http.get(f"{self.base}{path}", params=params, headers=HEADERS, cache_ttl=cache_ttl,
-                                 retries=2 if self.cg_key else 4)
+                                 retries=retries or (2 if self.cg_key else 4))
         except DataError as e:
             if not (self.cg_key and "429" in str(e)) or "shutting down" in str(e):
                 raise
@@ -70,7 +70,7 @@ class GeckoTerminal:
                                  headers={"x-cg-demo-api-key": self.cg_key, "accept": "application/json"})
 
     def _pool_mints(self, path: str, params: dict | None = None) -> list[str]:
-        data = self._get(path, params, cache_ttl=120)
+        data = self._get(path, params, cache_ttl=180, retries=1)
         mints = []
         for pool in data.get("data", []):
             tid = (((pool.get("relationships") or {}).get("base_token") or {})
@@ -103,7 +103,7 @@ class GeckoTerminal:
                              ("/networks/solana/pools", {"sort": "h24_volume_usd_desc"}),
                              ("/networks/solana/pools", {"sort": "h24_tx_count_desc"})):
             try:
-                data = self._get(path, params, cache_ttl=600)
+                data = self._get(path, params, cache_ttl=900, retries=1)
             except DataError:
                 continue
             for pool in data.get("data", []):

@@ -726,3 +726,28 @@ def test_fake_volume_coin_not_bought_by_desk_or_sniper(tmp_path):
                                            "lp": {"lpLockedPct": 100}}]))
     d2.scan_cycle()
     assert "fake_volume" in kills(d2, "sniper") and not d2.logger.positions("open", "sniper")
+
+
+def test_http_slows_down_on_429_and_recovers(monkeypatch):
+    import io
+    import urllib.error
+    from memedesk.http import HttpClient
+    seq = iter([429, 429, 200, 200, 200, 200])
+
+    class Resp(io.BytesIO):
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+
+    def fake(req, timeout=None):
+        code = next(seq)
+        if code == 429:
+            raise urllib.error.HTTPError(req.full_url, 429, "x", {"Retry-After": "0"}, None)
+        return Resp(b"{}")
+
+    monkeypatch.setattr("urllib.request.urlopen", fake)
+    h = HttpClient(rpm={"x.test": 6000})
+    h.get("https://x.test/a", retries=3)
+    assert h._rate("x.test") == pytest.approx(6000 / 4 + 0.25)    # halved twice, then one success
+    for _ in range(3):
+        h.get("https://x.test/b")
+    assert h._rate("x.test") == pytest.approx(6000 / 4 + 1.0)     # creeping back up

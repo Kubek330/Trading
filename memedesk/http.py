@@ -21,7 +21,7 @@ log = logging.getLogger("memedesk.http")
 
 DEFAULT_RPM = {
     "api.dexscreener.com": 240,
-    "api.geckoterminal.com": 25,
+    "api.geckoterminal.com": 12,
     "api.rugcheck.xyz": 50,
     "trench.bot": 25,
     "api.mainnet-beta.solana.com": 40,
@@ -47,14 +47,26 @@ class HttpClient:
         self._lock = threading.Lock()
         self.stats = {"requests": 0, "errors": 0, "rate_limited": 0, "cache_hits": 0}
         self.limited_by_host: dict[str, int] = {}
+        self._live_rpm: dict[str, float] = {}
         self.stop_event = threading.Event()  # set on shutdown: aborts waits immediately
 
     def _sleep(self, secs: float) -> None:
         if secs > 0 and self.stop_event.wait(secs):
             raise DataError("desk shutting down")
 
+    def _rate(self, host: str) -> float:
+        """Current requests/minute for a host: halves on every 429, creeps back up on successes (AIMD)."""
+        base = self.rpm.get(host, 60)
+        return self._live_rpm.get(host, base)
+
+    def _on_result(self, host: str, limited: bool) -> None:
+        base = self.rpm.get(host, 60)
+        with self._lock:
+            cur = self._live_rpm.get(host, base)
+            self._live_rpm[host] = max(2.0, cur / 2) if limited else min(base, cur + 0.25)
+
     def _wait_turn(self, host: str) -> None:
-        gap = 60.0 / self.rpm.get(host, 60)
+        gap = 60.0 / self._rate(host)
         with self._lock:
             now = time.monotonic()
             slot = max(now, self._next_slot.get(host, now), self._penalty.get(host, 0.0))
@@ -102,6 +114,7 @@ class HttpClient:
                     self.stats["rate_limited" if e.code == 429 else "errors"] += 1
                     if e.code == 429:
                         self.limited_by_host[host] = self.limited_by_host.get(host, 0) + 1
+                        self._on_result(host, limited=True)
                     last = f"HTTP {e.code}"
                     self._backoff(host, attempt, e.headers.get("Retry-After"), penalize=e.code == 429)
                     continue
@@ -122,6 +135,7 @@ class HttpClient:
                 if len(self._cache) > 5000:
                     now = time.time()
                     self._cache = {k: v for k, v in self._cache.items() if v[0] > now}
+            self._on_result(host, limited=False)
             return data
         raise DataError(f"{method} {host} failed after {retries} tries: {last}")
 
