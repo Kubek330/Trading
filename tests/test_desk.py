@@ -1046,9 +1046,9 @@ def test_momentum_stop_ignores_one_tick_wick_but_not_a_real_drop(tmp_path):
     d.risk.monitor(d.executor, lock)                                  # second check in a row below the stop
     [c] = d.logger.positions("closed", "momentum")
     assert c.exit_reason == "stop_loss"
-    # may buy the same coin again after 10 min (not 24 h)
+    # a losing exit: wait 60 min before this coin again (a profitable one: 10 min)
     until = d.logger.db.execute("SELECT until FROM cooldowns WHERE key=?", (f"momentum:{p.mint}",)).fetchone()[0]
-    assert until - time.time() == pytest.approx(600, abs=5)
+    assert until - time.time() == pytest.approx(3600, abs=5)
 
 
 def test_momentum_deep_gap_through_stop_sells_at_once(tmp_path):
@@ -1254,3 +1254,29 @@ def test_realistic_costs_flow_through_a_real_trade(tmp_path):
     d.executor.sell(p, 1.0, 0.001, "test", liq_usd=20_000, mcap=120_000)
     [c] = d.logger.positions("closed", "momentum")
     assert -8 < c.pnl_pct < -2                                            # round trip at an unchanged price costs a few %
+
+
+def test_momentum_stops_churning_one_coin(tmp_path):
+    d, dex = _mom_desk(tmp_path, [mom_pair()])
+    d.scan_cycle()                                                       # first entry
+    for i in range(3):                                                   # losing round trips
+        for p in d.logger.positions("open", "momentum"):
+            d.executor.sell(p, 1.0, p.entry_price * 0.8, "stop_loss")
+        d.logger.db.execute("DELETE FROM cooldowns"); d.logger.db.commit()
+        if i < 2:
+            d._momentum_arm({}, [])
+    assert len(d.logger.positions(book="momentum")) == 3
+    d.logger.db.execute("DELETE FROM cooldowns"); d.logger.db.commit()
+    d._momentum_arm({}, [])
+    assert not d.logger.positions("open", "momentum")
+    assert "too_many_tries" in kills(d, "momentum")
+
+
+def test_momentum_skips_fake_volume_coins(tmp_path):
+    class WashGecko(FakeGecko):
+        def trades(self, pool, window_min=60):
+            return [{"ts": NOW, "kind": "buy" if i % 2 else "sell", "wallet": f"w{i % 4}", "usd": 100} for i in range(120)]
+
+    d, _ = _mom_desk(tmp_path, [mom_pair()], gecko=WashGecko(), random_control=False)
+    d.scan_cycle()
+    assert "fake_volume" in kills(d, "momentum") and not d.logger.positions("open", "momentum")

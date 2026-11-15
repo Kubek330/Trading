@@ -175,7 +175,10 @@ class Config:
     mom_trending_bonus: float = 10.0         # quality bonus for coins on a trending list (still must pass every rule)
     mom_stop_confirm_ticks: int = 2          # hard stop fires only after this many price checks in a row below it...
     mom_stop_gap_pct: float = 8.0            # ...unless price is this far below the stop (looks like a real dump)
-    mom_reentry_cooldown_min: float = 10.0   # after an exit, may buy the same coin again this soon (still all rules)
+    mom_reentry_cooldown_min: float = 10.0   # after a profitable exit, may buy the same coin again this soon
+    mom_loss_cooldown_min: float = 60.0      # after a losing exit, wait this long before the same coin again
+    mom_max_entries_per_coin_24h: int = 3    # stop churning one coin
+    mom_wash_check: bool = True              # fake-volume check (wallet-level tape) before a momentum buy
     mom_readd: bool = True                   # after selling 75%, buy back in if it keeps rising
     mom_readd_above_pct: float = 10.0        # ...price at least this far above our last sell
     mom_readd_size_frac: float = 0.5         # ...half the original position

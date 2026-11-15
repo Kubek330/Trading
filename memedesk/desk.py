@@ -71,7 +71,8 @@ class Desk:
         own_dex = dex is None
         self.dex = dex = dex or DexScreener(self.http, cfg.dexscreener_url)
         self.cg_budget = MonthlyBudget(self.logger, "coingecko_demo", cfg.coingecko_monthly_cap)
-        gecko = gecko or GeckoTerminal(self.http, cfg.geckoterminal_url, cfg.coingecko_api_key, self.cg_budget)
+        self.gecko = gecko = gecko or GeckoTerminal(self.http, cfg.geckoterminal_url, cfg.coingecko_api_key,
+                                                    self.cg_budget)
         self.jup = jup if jup is not None else (
             JupiterTokens(self.http, cfg.jup_api_key) if cfg.min_organic_score > 0 else None)
         # the whale scout reads hundreds of transactions: give it its own, slower lane so it never queues
@@ -473,11 +474,28 @@ class Desk:
             checked += 1
             self.logger.handoff("momentum", "filter", c.mint, c.symbol)
             self._watch(c)
+            day_ago = time.time() - 86400
+            tries = [p for p in self.logger.positions(book="momentum")
+                     if p.mint == c.mint and not p.parent and p.opened_ts >= day_ago]
+            if len(tries) >= cfg.mom_max_entries_per_coin_24h:
+                self.logger.kill(Kill("momentum", c.mint, c.symbol, "too_many_tries",
+                                      f"{len(tries)} entries in 24h", cooldown_min=120, book="momentum"),
+                                 cfg.kill_cooldown_min, quiet=True)
+                continue
             v = self.mom_filter.run(c)
             if isinstance(v, Kill):
                 v.book, v.agent = "momentum", "filter"
                 self._kill(v)
                 continue
+            if cfg.mom_wash_check and cfg.wash_check:
+                from .agents.washcheck import wash_reason
+                try:
+                    tape = self.gecko.trades(c.pair_address, window_min=30)
+                except DataError:
+                    tape = []
+                if why := wash_reason(tape, cfg):
+                    self._kill(Kill("momentum", c.mint, c.symbol, "fake_volume", why, cooldown_min=60, book="momentum"))
+                    continue
             res = self.enter(self.momentum.pick(v))
             out[f"momentum_{res}"] = out.get(f"momentum_{res}", 0) + 1
             entered += res == "entered"

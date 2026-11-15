@@ -269,7 +269,11 @@ class Risk:
         self.logger.event(self.name, "exit", p.mint, p.symbol, reason, msg,
                           data={"position": p.to_dict()}, level=logging.WARNING)
         self.logger.notify(msg)
-        cool_min = self.cfg.mom_reentry_cooldown_min if p.book == "momentum" else self.cfg.reentry_cooldown_h * 60
+        if p.book == "momentum":
+            cool_min = (self.cfg.mom_reentry_cooldown_min if (p.pnl_usd or 0) >= 0
+                        else self.cfg.mom_loss_cooldown_min)
+        else:
+            cool_min = self.cfg.reentry_cooldown_h * 60
         self.logger.set_cooldown(p.mint, cool_min, self.name, "reentry", book=p.book)
         self.history.pop(p.id, None)
         if reason in ("liq_crash", "pool_vanished") and p.creator:
