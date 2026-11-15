@@ -7,3 +7,5 @@ smart_wallets.txt
 smart_wallets.tmp
 *.json.key
 id.json
+research_notes/
+reports/
