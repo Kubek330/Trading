@@ -6,8 +6,10 @@ invented. All strings that originate on-chain (token names) are escaped.
 """
 from __future__ import annotations
 
+import hmac
 import json
 import logging
+import secrets
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -47,7 +49,7 @@ def _book_view(desk, book: str, now: float, curve: list[dict]) -> dict:
         q = quotes.get(p.mint, {})
         w = desk.watch.get(p.mint, {})
         positions.append({
-            "symbol": p.symbol, "mint": p.mint, "pair": p.pair_address, "score": p.score,
+            "id": p.id, "symbol": p.symbol, "mint": p.mint, "pair": p.pair_address, "score": p.score,
             "mcap": q.get("mcap") or w.get("mcap"), "image": _safe_img(q.get("image") or w.get("image")),
             "entry": p.entry_price, "now": p.last_price,
             "pnl_usd": round(p.realized_usd + p.value_usd - p.cost_usd, 2),
@@ -141,6 +143,7 @@ def build_state(desk) -> dict:
     return {
         "now": now, "started": desk.started, "heartbeat": desk.heartbeat, "mode": desk.mode,
         "profile": cfg.profile, "version": getattr(desk, "version", ""),
+        "token": _token(desk) if hasattr(desk, "manual_sell") else "",
         "books": {b: _book_view(desk, b, now, curve) for b in cfg.books}, "compare": cmp,
         "curve": curve, "decisions": decisions, "ticker": ticker, "agents": agents,
         "funnel": {**_funnel(L, now - 3600), "watching": L.watch_count()},
@@ -170,8 +173,51 @@ def build_state(desk) -> dict:
     }
 
 
+LOCAL_HOSTS = {"127.0.0.1", "localhost", "[::1]", "::1"}
+
+
+def _token(desk) -> str:
+    """Per-run secret the page must send back with a sell: other websites can't read it."""
+    if not getattr(desk, "_dash_token", ""):
+        desk._dash_token = secrets.token_urlsafe(24)
+    return desk._dash_token
+
+
 def start_dashboard(desk) -> ThreadingHTTPServer | None:
     class Handler(BaseHTTPRequestHandler):
+        def _json(self, code: int, obj: dict) -> None:
+            body = json.dumps(obj).encode()
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_POST(self):
+            if self.path.split("?", 1)[0] != "/api/sell":
+                self.send_error(404)
+                return
+            host = (self.headers.get("Host") or "").rsplit(":", 1)[0].lower()
+            if host not in LOCAL_HOSTS | {desk.cfg.dashboard_host.lower()}:
+                return self._json(403, {"ok": False, "msg": "bad host"})
+            if not hasattr(desk, "manual_sell"):
+                return self._json(400, {"ok": False, "msg": "the desk is not trading (dashboard-only mode)"})
+            try:
+                n = min(int(self.headers.get("Content-Length") or 0), 4096)
+                req = json.loads(self.rfile.read(n) or b"{}")
+            except (ValueError, TypeError):
+                return self._json(400, {"ok": False, "msg": "bad request"})
+            tok = str(req.get("token", "")) if isinstance(req, dict) else ""
+            if not hmac.compare_digest(tok, _token(desk)) or self.headers.get("X-MemeDesk") != "1":
+                return self._json(403, {"ok": False, "msg": "bad token: reload the page"})
+            try:
+                ok, msg = desk.manual_sell(str(req.get("id", "")))
+            except Exception as e:  # never take the desk down
+                log.exception("manual sell failed")
+                ok, msg = False, str(e)[:200]
+            self._json(200 if ok else 409, {"ok": ok, "msg": msg})
+
         def do_GET(self):
             path = self.path.split("?", 1)[0]
             if path == "/api/state":
@@ -290,7 +336,9 @@ header h1{font:800 24px var(--sans);margin:0;letter-spacing:-.3px}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:16px;margin-bottom:12px}
 .card h2{margin:0 0 6px;font:700 17px var(--sans);display:flex;justify-content:space-between;align-items:baseline;gap:8px}
 .card h2 small{font:12px var(--mono);color:var(--mute)}
-.prow{display:grid;grid-template-columns:34px 1fr auto;gap:10px;align-items:center;padding:9px 0}
+.prow{display:grid;grid-template-columns:34px 1fr auto auto;gap:10px;align-items:center;padding:9px 0}
+.sellb{font:700 12px var(--mono);color:var(--down);background:transparent;border:1px solid var(--down);border-radius:8px;padding:6px 10px;cursor:pointer}
+.sellb:disabled{opacity:.4;cursor:wait}
 .prow .n{font:700 15px var(--sans);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .prow .n span{font:12px var(--mono);color:var(--mute);margin-left:6px}
 .prow .s{font-size:11px;color:var(--mute);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -435,7 +483,12 @@ function chart(pts,book,start){
 function positions(list){if(!list.length)return'<div class="empty">no open positions</div>';
  return list.map(p=>`<div class="prow">${av(p.image,p.symbol,1)}<div style="min-width:0"><div class="n"><a href="https://dexscreener.com/solana/${encodeURIComponent(p.pair)}" target="_blank" rel="noopener">${esc(sym(p.symbol))}</a><span>SOL · MC ${mc(p.mcap)}</span></div>
  <div class="s">${px(p.entry)} → ${px(p.now)}${p.tp_taken?" · TP taken":""} · ${p.age_h}h</div></div>
- <div class="v ${cls(p.pnl_usd)}">${smoney(p.pnl_usd)}<small>${pct(p.pnl_pct)}</small></div></div>`).join("")}
+ <div class="v ${cls(p.pnl_usd)}">${smoney(p.pnl_usd)}<small>${pct(p.pnl_pct)}</small></div>
+ ${S&&S.token&&p.id?`<button class="sellb" data-id="${esc(p.id)}" data-sym="${esc(sym(p.symbol))}" onclick="sellPos(this)">Sell</button>`:"<span></span>"}</div>`).join("")}
+async function sellPos(b){if(!confirm(`Sell all of ${b.dataset.sym} now?`))return;b.disabled=true;
+ try{const r=await fetch("/api/sell",{method:"POST",headers:{"Content-Type":"application/json","X-MemeDesk":"1"},
+  body:JSON.stringify({id:b.dataset.id,token:S.token})});const j=await r.json();alert(j.msg||(j.ok?"sold":"failed"))}
+ catch(e){alert("sell failed: "+e)}b.disabled=false;tick()}
 function decisions(list){if(!list.length)return'<div class="empty">no decisions yet</div>';
  return list.slice(0,40).map(d=>{const sc=d.side==="BUY"?"BUY":((d.pnl_usd??0)>=0?"SELLu":"SELLd");
   const amt=d.side==="BUY"&&d.usd!=null?` · ${money(d.usd)}`:"";

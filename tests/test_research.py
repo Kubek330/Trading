@@ -242,3 +242,41 @@ def test_evaluate_runs_on_a_real_desk(tmp_path):
     assert res["stats"]["momentum"]["n"] == 1 and "too few to judge" in text
     assert "shadow exits (same entries" in text and "stop12_hold4h" in text
     assert "candidates · mean forward return" in text
+
+
+# ---------------------------------------------------------------- manual sell button
+
+def test_manual_sell_from_the_dashboard(tmp_path):
+    import json
+    import urllib.error
+    import urllib.request
+    from memedesk.dashboard import build_state, start_dashboard
+    d, dex = _mom_desk(tmp_path, [mom_pair()], dashboard_port=0)
+    d.scan_cycle()
+    [p] = d.logger.positions("open", "momentum")
+    dex.set_price(p.mint, p.entry_price * 1.10)
+    srv = start_dashboard(d)
+    url = f"http://127.0.0.1:{srv.server_address[1]}/api/sell"
+    token = build_state(d)["token"]
+    assert build_state(d)["books"]["momentum"]["positions"][0]["id"] == p.id
+
+    def post(body, headers=None):
+        req = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST",
+                                     headers={"Content-Type": "application/json", **(headers or {})})
+        try:
+            r = urllib.request.urlopen(req)
+            return r.status, json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            return e.code, json.loads(e.read())
+
+    assert post({"id": p.id, "token": "wrong"}, {"X-MemeDesk": "1"})[0] == 403        # other sites can't sell
+    assert post({"id": p.id, "token": token})[0] == 403                               # header required
+    assert post({"id": p.id, "token": token}, {"X-MemeDesk": "1", "Host": "evil.example"})[0] == 403
+    code, res = post({"id": p.id, "token": token}, {"X-MemeDesk": "1"})
+    assert code == 200 and res["ok"] and "+" in res["msg"]
+    [c] = d.logger.positions("closed", "momentum")
+    assert c.exit_reason == "manual_sell" and c.pnl_usd > 0
+    assert post({"id": p.id, "token": token}, {"X-MemeDesk": "1"})[0] == 409          # already sold
+    reason = d.logger.db.execute("SELECT detail FROM events WHERE kind='decision' AND reason='SELL'").fetchone()[0]
+    assert reason.startswith("sold by you")
+    srv.shutdown()

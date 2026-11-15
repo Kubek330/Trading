@@ -427,6 +427,35 @@ class Desk:
                           detail=f"{len(d['buys'])} buy / {len(d['sells'])} sell ideas · {out}", data=out)
         return out
 
+    def manual_sell(self, pos_id: str) -> tuple[bool, str]:
+        """Sell button on the dashboard: close a whole position now, at a fresh price."""
+        p = next((x for x in self.logger.positions("open") if x.id == pos_id), None)
+        if p is None:
+            return False, "position is not open any more"
+        price = 0.0
+        try:
+            q = self.risk.dex.prices({p.mint}).get(p.mint) or {}
+            price = q.get("price") or 0.0
+            if price:
+                self.risk.quotes[p.mint] = {**self.risk.quotes.get(p.mint, {}), "price": price,
+                                            "liq": q.get("liq"), "mcap": q.get("mcap"), "ts": time.time()}
+        except DataError:
+            pass
+        if not price:
+            q = self.risk.quotes.get(p.mint) or {}
+            if time.time() - (q.get("ts") or 0) > 120:
+                return False, "no fresh price for this coin right now; try again in a moment"
+            price = q.get("price") or 0.0
+        if not price:
+            return False, "no price for this coin"
+        self.logger.event("desk", "manual", p.mint, p.symbol, p.book, f"manual sell from the dashboard at {price:.8g}",
+                          level=logging.WARNING)
+        self.risk._act(self.executor, self.trade_lock, p, ("exit", 1.0, "manual_sell"), price, time.time())
+        closed = next((x for x in self.logger.positions("closed", p.book) if x.id == p.id), None)
+        if closed is None:
+            return False, "sell failed, see the log"
+        return True, f"sold {p.symbol}: {closed.pnl_pct:+.1f}% (${closed.pnl_usd:+.2f})"
+
     def _ai_loop(self) -> None:
         self.stop_event.wait(45)
         while not self.stop_event.is_set():

@@ -172,6 +172,10 @@ python -m memedesk evaluate            # all time; --hours 24 for the last day
 
 Per book: number of closed trades, mean return with a 95% bootstrap interval, median, profit factor, win rate, share of trades losing 50% or more. Then each book against the random book (permutation test, Holm-corrected for comparing several books), results per rule version, the shadow-exit table and accepted-vs-rejected forward returns. With fewer than 30 trades a book is marked "too few to judge"; aim for 100+.
 
+## Manual sell
+
+Every open position on the dashboard has a **Sell** button. It asks for confirmation, fetches a fresh price and sells the whole position with the same simulated costs as the bot's own exits. It shows up as "sold by you" (`manual_sell`), and the usual re-entry cooldown applies. Only the page served by the desk itself can sell: the request needs a per-run token and must come to 127.0.0.1/localhost. Note that `evaluate` counts manual sells as part of the book's result; the shadow-exit table shows what the bot's rules alone would have done.
+
 ## Insider exit
 
 When PumpPortal is on, the desk subscribes to live trades of every coin it holds. If the coin's creator sells, or one wallet sells 1% or more of a pump.fun coin's supply in one trade (`DESK_INSIDER_SELL_SUPPLY_PCT`), the position is closed at once (`insider_sell`, "dev/insider sold"). Off with `DESK_INSIDER_EXIT=false`.
@@ -251,4 +255,4 @@ sqlite3 data/desk_paper.db "select agent, book, reason, count(*) from kills grou
 pip install pytest && python -m pytest -q
 ```
 
-There are 116 offline tests. They cover every filter kill rule (including top-10 holders with the pool vault excluded), the 8% cap, the −15% stop, the +35% partial sell, the runner trailing stop and its floor at entry, the 48h max hold, the Random arm's matched draws from filter survivors, handoff enforcement, the comparison verdicts, the dashboard server, HTTP backoff and caching, a check that only the standard library is imported, and Whale Scout: winner detection, wallet scoring/exclusions/add-drop reasons, whale-mode signals going through Filter/Analyst/Risk, both transaction parsers, signature paging, and pump.fun bonding-curve derivation. Newer tests cover the momentum and AI books, realistic costs, Token-2022 extension checks, insider-sell exits, rule versions, candidate forward returns, shadow exits and the `evaluate` statistics.
+There are 117 offline tests. They cover every filter kill rule (including top-10 holders with the pool vault excluded), the 8% cap, the −15% stop, the +35% partial sell, the runner trailing stop and its floor at entry, the 48h max hold, the Random arm's matched draws from filter survivors, handoff enforcement, the comparison verdicts, the dashboard server, HTTP backoff and caching, a check that only the standard library is imported, and Whale Scout: winner detection, wallet scoring/exclusions/add-drop reasons, whale-mode signals going through Filter/Analyst/Risk, both transaction parsers, signature paging, and pump.fun bonding-curve derivation. Newer tests cover the momentum and AI books, realistic costs, Token-2022 extension checks, insider-sell exits, rule versions, candidate forward returns, shadow exits and the `evaluate` statistics.

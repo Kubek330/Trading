@@ -27,7 +27,7 @@ EXIT_LABELS = {"stop_loss": "stop loss", "take_profit": "take profit 75%", "runn
                "chop_take_profit": "small profit, sideways",
                "spike_take_profit": "sold into spike",
                "ai_sell": "AI sold", "ai_take_profit": "AI take profit", "ai_time_up": "AI time limit",
-               "insider_sell": "dev/insider sold"}
+               "insider_sell": "dev/insider sold", "manual_sell": "sold by you"}
 PRICE_MISS_LIMIT = 20  # consecutive ticks with no price => pool treated as gone
 
 
