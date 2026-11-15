@@ -693,3 +693,36 @@ def test_unlabelled_curve_recognised_but_zero_liq_amm_still_killed():
     p2 = young_pair()
     p2["dexId"], p2["liquidity"]["usd"] = "unknownswap", 0
     assert not on_bonding_curve(candidate_from_pair(p2, []))          # not a launchpad mint
+
+
+def test_wash_detector():
+    from memedesk.agents.washcheck import wash_reason
+    cfg = Config()
+    organic = [{"wallet": f"w{i}", "kind": "buy", "usd": 50} for i in range(60)]
+    assert wash_reason(organic, cfg) is None
+    few = [{"wallet": f"w{i % 5}", "kind": "buy" if i % 2 else "sell", "usd": 50} for i in range(80)]
+    assert "only 5 wallets" in wash_reason(few, cfg)
+    whales = organic + [{"wallet": "big", "kind": "buy", "usd": 20_000}]
+    assert "top 3" in wash_reason(whales, cfg)
+    loop = [{"wallet": f"o{i}", "kind": "buy", "usd": 20} for i in range(40)]
+    for i in range(10):
+        for k in ("buy", "sell", "buy", "sell"):
+            loop.append({"wallet": f"bot{i}", "kind": k, "usd": 40})
+    assert "back and forth" in wash_reason(loop, cfg)
+    assert wash_reason(few[:10], cfg) is None                      # too short to judge
+
+
+def test_fake_volume_coin_not_bought_by_desk_or_sniper(tmp_path):
+    class WashGecko(FakeGecko):
+        def trades(self, pool, window_min=60):
+            return [{"ts": NOW, "kind": "buy" if i % 2 else "sell", "wallet": f"w{i % 4}", "usd": 100} for i in range(120)]
+
+    d, _ = make_desk(tmp_path, gecko=WashGecko(), random_control=False)
+    d.scan_cycle()
+    assert "fake_volume" in kills(d, "scored") and not d.logger.positions()
+    yp = young_pair()
+    d2, _ = make_desk(tmp_path / "b", pairs=[yp], gecko=WashGecko(),
+                      rep=report(markets=[{"pubkey": yp["pairAddress"], "liquidityAAccount": "PoolVault",
+                                           "lp": {"lpLockedPct": 100}}]))
+    d2.scan_cycle()
+    assert "fake_volume" in kills(d2, "sniper") and not d2.logger.positions("open", "sniper")

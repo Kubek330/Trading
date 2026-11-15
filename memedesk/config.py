@@ -86,6 +86,13 @@ class Config:
     min_organic_score: float = 30.0          # Jupiter organicScore 0-100; kill below (0 disables)
     organic_fail_closed: bool = False        # Jupiter has no score for the token => kill?
 
+    # ---- fake-volume (wash trading) check, from the wallet-level trade tape ---
+    wash_check: bool = True
+    wash_min_trades: int = 20                # need this many trades to judge
+    wash_min_unique_ratio: float = 0.25      # kill if unique wallets / trades below this
+    wash_max_top3_share: float = 0.60        # kill if the top 3 wallets make more of the volume
+    wash_max_roundtrip_share: float = 0.40   # kill if back-and-forth wallets make more of the volume
+
     # ---- analyst ----------------------------------------------------------
     min_score: float = 70.0
     w_momentum: float = 20.0

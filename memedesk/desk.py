@@ -81,7 +81,7 @@ class Desk:
         self.filter = Filter(cfg, rpc, rug, bundles, self.logger, jup=self.jup)
         self.analyst = Analyst(cfg, gecko, self.logger, self.grok, smart_wallets)
         self.random = RandomControl(cfg.random_seed) if cfg.random_control else None
-        self.sniper = Sniper(cfg, dex, self.logger) if cfg.sniper else None
+        self.sniper = Sniper(cfg, dex, self.logger, gecko) if cfg.sniper else None
         # same on-chain checks, thresholds for brand-new coins (no 1h-pump rule: they're minutes old)
         self.sniper_filter = Filter(replace(cfg, max_top10_pct=cfg.sniper_max_top10_pct, max_dev_pct=cfg.sniper_max_dev_pct,
                                             max_bundle_pct=cfg.sniper_max_bundle_pct, max_h1_change_pct=1e9,
@@ -250,6 +250,10 @@ class Desk:
                 v.agent = "filter"
                 self._kill(v)
                 out["sniper_filter_kills"] = out.get("sniper_filter_kills", 0) + 1
+                continue
+            if wk := self.sniper.wash(v):
+                self._kill(wk)
+                out["sniper_fake_volume"] = out.get("sniper_fake_volume", 0) + 1
                 continue
             picks.append(self.sniper.pick(v))
         for pick in sorted(picks, key=lambda p: -p.momentum):

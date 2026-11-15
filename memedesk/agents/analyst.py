@@ -118,6 +118,11 @@ class Analyst:
             return Kill(self.name, c.mint, c.symbol, "no_trade_data", f"trade tape unavailable, retry in 3m: {e}"[:200],
                         cooldown_min=3, book="scored")
 
+        if self.cfg.wash_check and trades:
+            from .washcheck import wash_reason
+            if why := wash_reason(trades, self.cfg):
+                return Kill(self.name, c.mint, c.symbol, "fake_volume", why, cooldown_min=60, book="scored")
+
         buyers = {t["wallet"] for t in trades or [] if t["kind"] == "buy" and t["wallet"]}
         tx = c.txns.get("h1", {})
         ratios = []

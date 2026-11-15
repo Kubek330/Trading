@@ -42,8 +42,8 @@ class Sniper:
     name = "sniper"
     book = "sniper"
 
-    def __init__(self, cfg: Config, dex, logger):
-        self.cfg, self.dex, self.logger = cfg, dex, logger
+    def __init__(self, cfg: Config, dex, logger, gecko=None):
+        self.cfg, self.dex, self.logger, self.gecko = cfg, dex, logger, gecko
         self.track: dict[str, float] = {}   # mint -> first seen
 
     def candidates(self, young: list[Candidate]) -> list[Candidate]:
@@ -103,6 +103,21 @@ class Sniper:
             return kill("vertical", f"+{m5:.0f}% in 5m > {cfg.sniper_max_m5_pct:g}%")
         if m5 < 0:
             return kill("falling", f"{m5:.0f}% in 5m")
+        return None
+
+    def wash(self, v: Vetted) -> Kill | None:
+        """Fake-volume check on the coin's last 15 minutes of trades (cheap: only for coins past the filter)."""
+        if not (self.cfg.wash_check and self.gecko):
+            return None
+        from ..http import DataError
+        from .washcheck import wash_reason
+        c = v.candidate
+        try:
+            trades = self.gecko.trades(c.pair_address, window_min=15)
+        except DataError:
+            return None
+        if why := wash_reason(trades, self.cfg):
+            return Kill(self.name, c.mint, c.symbol, "fake_volume", why, cooldown_min=30, book=self.book)
         return None
 
     def pick(self, v: Vetted) -> SniperPick:

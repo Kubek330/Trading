@@ -74,6 +74,15 @@ If nothing gets bought:
 - **Fast profile:** stops are checked every 5 s instead of every 15 s.
 - **"What works" card:** win rate and average return per book, per analyst-score band, and per exit reason, from closed trades only.
 
+## Fake-volume check
+
+Many fresh memecoins wash-trade, meaning a few wallets trade with each other so the coin looks busy. Before the Analyst scores a coin, and before the Sniper buys one, the desk reads its wallet-level trade tape from GeckoTerminal: the last 60 minutes for the Analyst, the last 15 for the Sniper. It kills the coin as `fake_volume` when any of these is true:
+- fewer than 1 in 4 trades comes from a distinct wallet;
+- the top 3 wallets make more than 60% of the volume;
+- wallets that buy and sell repeatedly make more than 40% of the volume.
+
+At least 20 trades are needed to judge. The thresholds are the `DESK_WASH_*` settings.
+
 ## Sniper (separate experiment)
 
 The sniper hunts **brand-new coins, 3–30 minutes old**: the ones the main desk rejects as too young. It trades its own $1000 paper book, shown on the **Sniper** tab, so its results never mix with the scored or random books.
@@ -155,4 +164,4 @@ sqlite3 data/desk_paper.db "select agent, book, reason, count(*) from kills grou
 pip install pytest && python -m pytest -q
 ```
 
-There are 65 offline tests. They cover every filter kill rule (including top-10 holders with the pool vault excluded), the 8% cap, the −15% stop, the +35% partial sell, the runner trailing stop and its floor at entry, the 48h max hold, the Random arm's matched draws from filter survivors, handoff enforcement, the comparison verdicts, the dashboard server, HTTP backoff and caching, a check that only the standard library is imported, and Whale Scout: winner detection, wallet scoring/exclusions/add-drop reasons, whale-mode signals going through Filter/Analyst/Risk, both transaction parsers, signature paging, and pump.fun bonding-curve derivation.
+There are 67 offline tests. They cover every filter kill rule (including top-10 holders with the pool vault excluded), the 8% cap, the −15% stop, the +35% partial sell, the runner trailing stop and its floor at entry, the 48h max hold, the Random arm's matched draws from filter survivors, handoff enforcement, the comparison verdicts, the dashboard server, HTTP backoff and caching, a check that only the standard library is imported, and Whale Scout: winner detection, wallet scoring/exclusions/add-drop reasons, whale-mode signals going through Filter/Analyst/Risk, both transaction parsers, signature paging, and pump.fun bonding-curve derivation.
