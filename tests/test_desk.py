@@ -1027,3 +1027,33 @@ def test_momentum_spike_end_to_end(tmp_path):
     assert p2.tp_taken and p2.qty == pytest.approx(p2.initial_qty * 0.25)
     sell = d.logger.db.execute("SELECT detail FROM events WHERE kind='decision' AND reason='SELL'").fetchone()[0]
     assert sell.startswith("sold 75% into spike")
+
+
+def test_momentum_stop_ignores_one_tick_wick_but_not_a_real_drop(tmp_path):
+    d, dex = _mom_desk(tmp_path, [mom_pair()])
+    d.scan_cycle()
+    [p] = d.logger.positions("open", "momentum")
+    lock = threading.RLock()
+    dex.set_price(p.mint, p.entry_price * 0.86)                       # wick just under the -12% stop
+    d.risk.monitor(d.executor, lock)
+    assert d.logger.positions("open", "momentum")                     # not sold on the first touch
+    dex.set_price(p.mint, p.entry_price * 1.01)                       # ...and it bounced back
+    d.risk.monitor(d.executor, lock)
+    dex.set_price(p.mint, p.entry_price * 0.86)
+    d.risk.monitor(d.executor, lock)
+    assert d.logger.positions("open", "momentum")                     # strike count reset by the bounce
+    d.risk.monitor(d.executor, lock)                                  # second check in a row below the stop
+    [c] = d.logger.positions("closed", "momentum")
+    assert c.exit_reason == "stop_loss"
+    # may buy the same coin again after 10 min (not 24 h)
+    until = d.logger.db.execute("SELECT until FROM cooldowns WHERE key=?", (f"momentum:{p.mint}",)).fetchone()[0]
+    assert until - time.time() == pytest.approx(600, abs=5)
+
+
+def test_momentum_deep_gap_through_stop_sells_at_once(tmp_path):
+    d, dex = _mom_desk(tmp_path, [mom_pair()])
+    d.scan_cycle()
+    [p] = d.logger.positions("open", "momentum")
+    dex.set_price(p.mint, p.entry_price * 0.75)                       # 13% under the stop: looks like a rug
+    d.risk.monitor(d.executor, threading.RLock())
+    assert d.logger.positions("closed", "momentum")[0].exit_reason == "stop_loss"

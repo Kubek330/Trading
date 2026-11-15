@@ -133,6 +133,7 @@ class Risk:
     def __init__(self, cfg: Config, logger, dex):
         self.cfg, self.logger, self.dex = cfg, logger, dex
         self.quotes: dict[str, dict] = {}   # mint -> latest {price, mcap, h1, ts} for the dashboard
+        self.stop_strikes: dict[str, int] = {}
         self.history: dict[str, deque] = {}  # position id -> recent (ts, price) samples (every monitor tick)
 
     # ---- pre-trade --------------------------------------------------------
@@ -167,6 +168,24 @@ class Risk:
         return RiskApproval(ticket_id=t.id, stop_pct=rules.stop_pct, max_size_usd=min(cap, t.size_usd))
 
     # ---- live management --------------------------------------------------
+    def _confirm_stop(self, p: Position, price: float, action):
+        """Momentum: a one-tick wick through the hard stop doesn't sell; two checks in a row below it do,
+        and a deep gap (>= 8% under the stop) sells at once."""
+        if not action or action[2] != "stop_loss":
+            self.stop_strikes.pop(p.id, None)
+            return action
+        if price <= p.stop_price * (1 - self.cfg.mom_stop_gap_pct / 100):
+            self.stop_strikes.pop(p.id, None)
+            return action
+        n = self.stop_strikes.get(p.id, 0) + 1
+        if n >= self.cfg.mom_stop_confirm_ticks:
+            self.stop_strikes.pop(p.id, None)
+            return action
+        self.stop_strikes[p.id] = n
+        self.logger.event(self.name, "stop_move", p.mint, p.symbol, p.book,
+                          f"price under stop ({price:.8g} < {p.stop_price:.8g}): confirming on next check")
+        return None
+
     def monitor(self, executor, lock) -> None:
         open_pos = self.logger.positions("open")
         if not open_pos:
@@ -192,6 +211,8 @@ class Risk:
                 p.price_misses = 0
                 price = q["price"]
                 action, events = step(p, price, q["liq"], now, self.cfg.rules(p.book))
+                if p.book == "momentum":
+                    action = self._confirm_stop(p, price, action)
                 if action is None:
                     action = dump_check(p, price, q.get("pair") or {}, self.cfg)
                 hist = self.history.setdefault(p.id, deque(maxlen=200))
@@ -244,7 +265,8 @@ class Risk:
         self.logger.event(self.name, "exit", p.mint, p.symbol, reason, msg,
                           data={"position": p.to_dict()}, level=logging.WARNING)
         self.logger.notify(msg)
-        self.logger.set_cooldown(p.mint, self.cfg.reentry_cooldown_h * 60, self.name, "reentry", book=p.book)
+        cool_min = self.cfg.mom_reentry_cooldown_min if p.book == "momentum" else self.cfg.reentry_cooldown_h * 60
+        self.logger.set_cooldown(p.mint, cool_min, self.name, "reentry", book=p.book)
         self.history.pop(p.id, None)
         if reason in ("liq_crash", "pool_vanished") and p.creator:
             self.logger.put(f"rugger:{p.creator}", {"mint": p.mint, "ts": now})

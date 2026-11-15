@@ -173,6 +173,9 @@ class Config:
     mom_track_max: int = 150                 # coins momentum re-checks every scan (30 per DexScreener call)
     mom_track_hours: float = 6.0             # how long a seen coin stays on momentum's list
     mom_trending_bonus: float = 10.0         # quality bonus for coins on a trending list (still must pass every rule)
+    mom_stop_confirm_ticks: int = 2          # hard stop fires only after this many price checks in a row below it...
+    mom_stop_gap_pct: float = 8.0            # ...unless price is this far below the stop (looks like a real dump)
+    mom_reentry_cooldown_min: float = 10.0   # after an exit, may buy the same coin again this soon (still all rules)
     mom_spike_pct: float = 15.0              # price up this much inside the window = a spike: sell into it
     mom_spike_window_s: float = 180.0
     mom_spike_min_pnl_pct: float = 5.0       # only when the position is at least this much in profit
