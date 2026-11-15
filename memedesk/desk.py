@@ -65,6 +65,7 @@ class Desk:
         if not cfg.momentum:
             self.agents["momentum"]["state"] = "off"
         self.logger.listeners.append(self._on_event)
+        own_dex = dex is None
         self.dex = dex = dex or DexScreener(self.http, cfg.dexscreener_url)
         self.cg_budget = MonthlyBudget(self.logger, "coingecko_demo", cfg.coingecko_monthly_cap)
         gecko = gecko or GeckoTerminal(self.http, cfg.geckoterminal_url, cfg.coingecko_api_key, self.cg_budget)
@@ -110,7 +111,14 @@ class Desk:
         self._mom_seeds: list[Candidate] = []
         self._mom_thread = False
         self.executor = Executor(cfg, self.broker, dex, self.logger)
-        self.risk = Risk(cfg, self.logger, dex)
+        # stops must never wait behind discovery traffic: the risk monitor gets its own DexScreener lane
+        if own_dex:
+            self.risk_http = HttpClient(timeout=10, rpm={"api.dexscreener.com": 120})
+            self.risk_http.stop_event = self.http.stop_event
+            risk_dex = DexScreener(self.risk_http, cfg.dexscreener_url)
+        else:
+            risk_dex = dex                      # injected (tests): use it as-is
+        self.risk = Risk(cfg, self.logger, risk_dex)
         self.trade_lock = threading.RLock()
         self.stop_event = getattr(self.http, "stop_event", None) or threading.Event()
         self.whale_queue: queue.Queue[Candidate] = queue.Queue()

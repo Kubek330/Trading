@@ -80,6 +80,7 @@ If nothing gets bought:
 - **Jupiter Tokens V2:** besides the organic score, its `audit` fields (top holders %, dev %, mint/freeze status) and holder count fill in for RugCheck when RugCheck or the RPC doesn't answer, so coins aren't killed as "unknown". A token Jupiter flags `isSus` is killed. A free key from portal.jup.ag (`JUP_API_KEY`) is recommended, because the keyless lite-api is being throttled ahead of retirement.
 - **PumpSwap pools:** pump.fun burns the liquidity pool tokens it creates at migration, so a PumpSwap pool of a pump.fun mint counts as LP-burned when RugCheck has no data.
 - **Helius free tier:** setting `HELIUS_API_KEY` replaces the slow public RPC for both the filter and the whale scout.
+- **Stops first:** the risk monitor fetches prices over its own DexScreener lane, so discovery traffic never delays a stop or exit.
 - **Dead hosts:** after 5 consecutive network failures a source is skipped for 10 minutes instead of being waited on for every coin.
 
 ## Fake-volume check
@@ -152,6 +153,10 @@ To keep it alive overnight: set Android Settings → Apps → Termux → Battery
 - trade tapes: 1 minute
 
 The dashboard header shows request, 429 and cache-hit counts.
+
+## Windows
+
+Double-click `scripts\run_windows.bat`, or run it from cmd. It starts the desk and restarts it automatically if it crashes; crashes are noted in `data\crashes.log`. Ctrl+C (then Y) stops it, and so does closing the window.
 
 ## Other machines
 
