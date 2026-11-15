@@ -20,7 +20,7 @@ TICKET_TTL_S = 60.0
 def _curve_dexes():
     from .filter import BONDING_CURVE_DEXES
     return BONDING_CURVE_DEXES
-UPSTREAM = {"scored": "analyst", "random": "random", "sniper": "sniper"}
+UPSTREAM = {"scored": "analyst", "random": "random", "sniper": "sniper", "momentum": "momentum"}
 
 
 class Executor:
@@ -58,7 +58,7 @@ class Executor:
         if b5 + s5 >= 10 and s5 and b5 / s5 < self.cfg.entry_min_buy_sell_m5:
             return kill("sellers_now", f"5m buy/sell {b5}/{s5}", cooldown=2)
         h1 = float((q["pair"].get("priceChange") or {}).get("h1") or 0)
-        if book != "sniper" and h1 > self.cfg.max_h1_change_pct:  # sniper judges brand-new coins by its own m5 rules
+        if book not in ("sniper", "momentum") and h1 > self.cfg.max_h1_change_pct:  # sniper judges brand-new coins by its own m5 rules
             return kill("pumped_1h", f"+{h1:.0f}% in 1h at requote", cooldown=60)
 
         pct = min(self.cfg.rules(book).position_pct, HARD_MAX_POSITION_PCT)

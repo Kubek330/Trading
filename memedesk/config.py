@@ -155,6 +155,28 @@ class Config:
     sniper_max_hold_h: float = 6.0
     sniper_max_open_positions: int = 5
 
+    # ---- momentum (separate experiment book: buys often, fable60-style) -----
+    momentum: bool = True
+    mom_min_age_min: float = 3.0
+    mom_max_age_h: float = 72.0
+    mom_min_mcap: float = 10_000.0
+    mom_max_mcap: float = 20_000_000.0
+    mom_min_liq: float = 5_000.0             # not applied on bonding curves (DexScreener shows ~$0 there)
+    mom_min_txns_m5: int = 10
+    mom_min_buy_sell_m5: float = 1.2
+    mom_max_m5_pct: float = 60.0
+    mom_max_h1_pct: float = 300.0
+    mom_max_entries_per_scan: int = 2
+    mom_max_top10_pct: float = 35.0
+    mom_max_dev_pct: float = 10.0
+    mom_position_pct: float = 5.0
+    mom_stop_pct: float = 12.0
+    mom_tp_trigger_pct: float = 25.0
+    mom_tp_sell_pct: float = 75.0
+    mom_runner_trail_pct: float = 20.0
+    mom_max_hold_h: float = 4.0
+    mom_max_open_positions: int = 6
+
     # ---- executor ---------------------------------------------------------
     position_pct: float = 8.0                # of the book's equity; clamped to 8
     max_pool_impact_pct: float = 1.0         # size <= this % of pool liquidity
@@ -264,13 +286,19 @@ class Config:
 
     @property
     def books(self) -> list[str]:
-        return ["scored"] + (["random"] if self.random_control else []) + (["sniper"] if self.sniper else [])
+        return (["scored"] + (["random"] if self.random_control else []) + (["sniper"] if self.sniper else [])
+                + (["momentum"] if self.momentum else []))
 
     def rules(self, book: str) -> "Config":
-        """Exit/sizing rules for a book. Sniper has its own; scored and random share the main ones."""
+        """Exit/sizing rules for a book. Sniper and momentum have their own; scored and random share the main ones."""
+        from dataclasses import replace
+        if book == "momentum":
+            return replace(self, stop_pct=self.mom_stop_pct, tp_trigger_pct=self.mom_tp_trigger_pct,
+                           tp_sell_pct=self.mom_tp_sell_pct, runner_trail_pct=self.mom_runner_trail_pct,
+                           max_hold_h=self.mom_max_hold_h, position_pct=min(self.mom_position_pct, HARD_MAX_POSITION_PCT),
+                           max_open_positions=self.mom_max_open_positions)
         if book != "sniper":
             return self
-        from dataclasses import replace
         return replace(self, stop_pct=self.sniper_stop_pct, tp_trigger_pct=self.sniper_tp_trigger_pct,
                        tp_sell_pct=self.sniper_tp_sell_pct, runner_trail_pct=self.sniper_runner_trail_pct,
                        max_hold_h=self.sniper_max_hold_h, position_pct=min(self.sniper_position_pct, HARD_MAX_POSITION_PCT),

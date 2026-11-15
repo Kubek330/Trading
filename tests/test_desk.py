@@ -376,7 +376,7 @@ def test_dashboard_state_and_server(tmp_path):
     srv = start_dashboard(d)
     port = srv.server_address[1]
     body = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{port}/api/state").read())
-    assert set(body["books"]) == {"scored", "random", "sniper"}
+    assert set(body["books"]) == {"scored", "random", "sniper", "momentum"}
     page = urllib.request.urlopen(f"http://127.0.0.1:{port}/").read().decode()
     assert "MemeDesk" in page and "esc(" in page
     srv.shutdown()
@@ -751,3 +751,49 @@ def test_http_slows_down_on_429_and_recovers(monkeypatch):
     for _ in range(3):
         h.get("https://x.test/b")
     assert h._rate("x.test") == pytest.approx(6000 / 4 + 1.0)     # creeping back up
+
+
+def mom_pair(i=0, m5=6.0, h1=30.0, buys=40, sells=15, mcap=120_000):
+    mint = f"Mom{i:02d}" + "1" * 39
+    p = pair(mint=mint, sym=f"MOM{i}", age_h=5, mcap=mcap, liq=20_000, h1=h1, m5=m5)
+    p["txns"]["m5"] = {"buys": buys, "sells": sells}
+    return p
+
+
+def _mom_desk(tmp_path, pairs, **kw):
+    reps = {"markets": [{"pubkey": p["pairAddress"], "liquidityAAccount": "PoolVault", "lp": {"lpLockedPct": 100}}
+                        for p in pairs]}
+    return make_desk(tmp_path, pairs=pairs, rep=report(**reps), **kw)
+
+
+def test_momentum_buys_small_rising_coin_main_desk_ignores(tmp_path):
+    d, _ = _mom_desk(tmp_path, [mom_pair()])
+    out = d.scan_cycle()
+    assert out.get("momentum_entered") == 1, kills(d)
+    [p] = d.logger.positions("open", "momentum")
+    assert p.cost_usd == pytest.approx(50.0) and p.stop_price == pytest.approx(p.entry_price * 0.88)
+    assert "mcap_low" in kills(d) and not d.logger.positions("open", "scored")
+    why = d.logger.db.execute("SELECT detail FROM events WHERE kind='decision'").fetchone()[0]
+    assert why.startswith("momentum ") and "+6% 5m" in why
+
+
+def test_momentum_skips_falling_or_late_and_caps_entries(tmp_path):
+    d, _ = _mom_desk(tmp_path, [mom_pair(0, m5=-3), mom_pair(1, h1=-5), mom_pair(2, m5=90)])
+    d.scan_cycle()
+    assert not d.logger.positions("open", "momentum")
+    reasons = set(kills(d, "momentum"))
+    assert {"not_rising", "downtrend", "too_late"} <= reasons
+    d2, _ = _mom_desk(tmp_path / "b", [mom_pair(i) for i in range(5)])
+    d2.scan_cycle()
+    assert len(d2.logger.positions("open", "momentum")) == 2                 # max 2 entries per scan
+
+
+def test_momentum_still_respects_hard_safety(tmp_path):
+    d, _ = _mom_desk(tmp_path, [mom_pair()], rpc=FakeRPC(mint_auth="Auth1111"))
+    d.scan_cycle()
+    assert "mint_authority_live" in kills(d, "momentum") and not d.logger.positions("open", "momentum")
+
+
+def test_momentum_exit_rules():
+    r = Config().rules("momentum")
+    assert (r.stop_pct, r.tp_trigger_pct, r.runner_trail_pct, r.max_hold_h, r.position_pct) == (12, 25, 20, 4, 5)

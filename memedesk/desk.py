@@ -27,6 +27,7 @@ from .agents.risk import Risk
 from .agents.scout import Scout
 from .agents.sniper import SKIP as SNIPER_SKIP
 from .agents.sniper import Sniper
+from .agents.momentum import Momentum
 from .agents.whale_scout import WhaleScout
 from .broker.paper import PaperBroker
 from .config import Config
@@ -43,7 +44,7 @@ from .sources.solana_rpc import SolanaRPC
 
 log = logging.getLogger("memedesk")
 
-AGENTS = ["whale_scout", "scout", "filter", "analyst", "executor", "risk", "logger", "random", "sniper"]
+AGENTS = ["whale_scout", "scout", "filter", "analyst", "executor", "risk", "logger", "random", "sniper", "momentum"]
 
 
 class Desk:
@@ -61,6 +62,8 @@ class Desk:
             self.agents["random"]["state"] = "off"
         if not cfg.sniper:
             self.agents["sniper"]["state"] = "off"
+        if not cfg.momentum:
+            self.agents["momentum"]["state"] = "off"
         self.logger.listeners.append(self._on_event)
         self.dex = dex = dex or DexScreener(self.http, cfg.dexscreener_url)
         self.cg_budget = MonthlyBudget(self.logger, "coingecko_demo", cfg.coingecko_monthly_cap)
@@ -87,6 +90,13 @@ class Desk:
                                             max_bundle_pct=cfg.sniper_max_bundle_pct, max_h1_change_pct=1e9,
                                             min_organic_score=cfg.sniper_min_organic_score),
                                     rpc, rug, bundles, self.logger, jup=self.jup) if cfg.sniper else None
+        self.momentum = Momentum(cfg) if cfg.momentum else None
+        # hard safety only: authorities / LP (or curve) / rugged / holders / dev; no bundle, organic or 1h-pump rules
+        self.mom_filter = Filter(replace(cfg, profile="active", max_top10_pct=cfg.mom_max_top10_pct,
+                                         max_dev_pct=cfg.mom_max_dev_pct, max_bundle_pct=100.0,
+                                         max_h1_change_pct=1e9, min_liq_mcap_pct=0.0, min_organic_score=0.0),
+                                 rpc, rug, bundles, self.logger, jup=None) if cfg.momentum else None
+        self._young_cands: list[Candidate] = []
         self.executor = Executor(cfg, self.broker, dex, self.logger)
         self.risk = Risk(cfg, self.logger, dex)
         self.trade_lock = threading.RLock()
@@ -210,6 +220,9 @@ class Desk:
             why = f"random pick {pick.index + 1}/{pick.pool_size}"
         elif book == "sniper":
             why = f"snipe · {c.age_h * 60:.0f}m old · momentum {pick.momentum:.0f}"
+        elif book == "momentum":
+            why = (f"momentum {pick.momentum:.0f} · {c.price_change.get('m5', 0):+.0f}% 5m · "
+                   f"{c.price_change.get('h1', 0):+.0f}% 1h")
         else:
             why = (f"{c.reason} · score {pos.score:.0f}" if c.reason else f"score {pos.score:.0f}")
         origin = "whale" if c.trail[0] == "whale_scout" else "pipeline"
@@ -229,6 +242,7 @@ class Desk:
             return
         with self.working("sniper"):
             cands = self.sniper.candidates(self.scout.young)
+        self._young_cands = cands
         picks = []
         for c in cands:
             if self.stop_event.is_set():
@@ -259,6 +273,42 @@ class Desk:
         for pick in sorted(picks, key=lambda p: -p.momentum):
             res = self.enter(pick)
             out[f"sniper_{res}"] = out.get(f"sniper_{res}", 0) + 1
+
+    def _momentum_arm(self, out: dict, in_window: list[Candidate]) -> None:
+        if not self.momentum:
+            return
+        pool: dict[str, Candidate] = {}
+        for c in [*in_window, *self.scout.small, *(self._young_cands or self.scout.young)]:
+            pool.setdefault(c.mint, c)
+        passed = []
+        with self.working("momentum"):
+            for c in pool.values():
+                if self._blocked(c.mint, "momentum"):
+                    continue
+                k = self.momentum.prefilter(c)
+                if k is SNIPER_SKIP:
+                    continue
+                if k:
+                    self.logger.kill(k, self.cfg.kill_cooldown_min, quiet=True)
+                    out["momentum_skips"] = out.get("momentum_skips", 0) + 1
+                    continue
+                passed.append(c)
+        entered, checked = 0, 0
+        from .agents.sniper import momentum_score
+        for c in sorted(passed, key=momentum_score, reverse=True):
+            if entered >= self.cfg.mom_max_entries_per_scan or checked >= 6 or self.stop_event.is_set():
+                break
+            checked += 1
+            self.logger.handoff("momentum", "filter", c.mint, c.symbol)
+            self._watch(c)
+            v = self.mom_filter.run(c)
+            if isinstance(v, Kill):
+                v.book, v.agent = "momentum", "filter"
+                self._kill(v)
+                continue
+            res = self.enter(self.momentum.pick(v))
+            out[f"momentum_{res}"] = out.get(f"momentum_{res}", 0) + 1
+            entered += res == "entered"
 
     def _random_arm(self, pool: list[Vetted], n: int, out: dict | None = None) -> None:
         if not self.random or n <= 0:
@@ -329,6 +379,10 @@ class Desk:
             self._sniper_arm(out)
         except Exception:
             log.exception("sniper arm failed")
+        try:
+            self._momentum_arm(out, cands)
+        except Exception:
+            log.exception("momentum arm failed")
         eq = {b: round(self.equity(b)[0], 2) for b in self.cfg.books}
         self.last_cycle = {"ts": time.time(), "secs": round(time.time() - t0, 1), "outcome": out, "equity": eq,
                            "http": dict(self.http.stats), "limited_by_host": dict(getattr(self.http, "limited_by_host", {})),

@@ -94,6 +94,17 @@ The sniper hunts **brand-new coins, 3–30 minutes old**: the ones the main desk
 - **Exits:** 4% per trade, stop −20%, at +50% sell 75%, the runner trails 30% below its peak (never below entry), max hold 6 h.
 - **Turning it off:** set `DESK_SNIPER=false`. Every threshold is a `DESK_SNIPER_*` setting.
 
+## Momentum (separate experiment)
+
+A "buy what's rising" book, the opposite of the strict main desk. It has its own $1000 paper book and its own tab.
+- **Universe:** every coin Scout saw that is 3 min – 72 h old and $10k – $20M mcap, including coins under the main desk's $300k floor.
+- **Entry:** up over 5 min (but not more than 60%) and over 1 h (but not more than 300%), at least 10 trades in 5 min, buyers ≥ 1.2× sellers. At most 2 buys per scan, strongest first.
+- **Safety:** hard checks only: mint/freeze authority, LP lock (or bonding curve), not rugged, top-10 ≤ 35%, dev ≤ 10%. **No** analyst score, holder-growth wait, organic score or fake-volume check.
+- **Exits:** 5% per trade, stop −12%, at +25% sell 75%, the runner trails 20% (floor at entry), max hold 4 h.
+- **Turning it off:** set `DESK_MOMENTUM=false`. Thresholds are the `DESK_MOM_*` settings.
+
+Comparing Momentum with the Desk book on the dashboard shows whether buying often beats being picky, after slippage and fees.
+
 ## Does scoring beat luck?
 
 The dashboard and the report compare the two books: win rate, average and median return per trade, take-profit hits, and equity. They also run a Welch t-test on per-trade returns. Until each book has **20+ closed trades**, the verdict reads "too early". After that, a t-value above 2 means the score is adding edge over the filter alone. A t-value between −2 and 2 means it hasn't shown any edge yet.
@@ -164,4 +175,4 @@ sqlite3 data/desk_paper.db "select agent, book, reason, count(*) from kills grou
 pip install pytest && python -m pytest -q
 ```
 
-There are 68 offline tests. They cover every filter kill rule (including top-10 holders with the pool vault excluded), the 8% cap, the −15% stop, the +35% partial sell, the runner trailing stop and its floor at entry, the 48h max hold, the Random arm's matched draws from filter survivors, handoff enforcement, the comparison verdicts, the dashboard server, HTTP backoff and caching, a check that only the standard library is imported, and Whale Scout: winner detection, wallet scoring/exclusions/add-drop reasons, whale-mode signals going through Filter/Analyst/Risk, both transaction parsers, signature paging, and pump.fun bonding-curve derivation.
+There are 72 offline tests. They cover every filter kill rule (including top-10 holders with the pool vault excluded), the 8% cap, the −15% stop, the +35% partial sell, the runner trailing stop and its floor at entry, the 48h max hold, the Random arm's matched draws from filter survivors, handoff enforcement, the comparison verdicts, the dashboard server, HTTP backoff and caching, a check that only the standard library is imported, and Whale Scout: winner detection, wallet scoring/exclusions/add-drop reasons, whale-mode signals going through Filter/Analyst/Risk, both transaction parsers, signature paging, and pump.fun bonding-curve derivation.
