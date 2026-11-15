@@ -1063,3 +1063,50 @@ def test_momentum_does_not_chase_a_vertical_candle(tmp_path):
     d, _ = _mom_desk(tmp_path, [mom_pair(m5=28)])                      # +28% in 5 min: the spike itself
     d.scan_cycle()
     assert "too_late" in kills(d, "momentum") and not d.logger.positions("open", "momentum")
+
+
+def test_momentum_buys_back_in_when_it_keeps_rising_after_the_partial_sell(tmp_path):
+    p0 = mom_pair()
+    d, dex = _mom_desk(tmp_path, [p0])
+    d.scan_cycle()
+    [p] = d.logger.positions("open", "momentum")
+    lock = threading.RLock()
+    dex.set_price(p.mint, p.entry_price * 1.26)                        # +26%: take profit 75%
+    d.risk.history.clear()
+    d.risk.monitor(d.executor, lock)
+    [r] = d.logger.positions("open", "momentum")
+    assert r.tp_taken and r.sells
+    sold_at = r.sells[-1]["price"]
+    p0["priceUsd"] = str(sold_at * 1.15)                                 # kept rising: +15% above our sell
+    p0["priceChange"]["m5"] = 6
+    d.risk.history.clear()                                              # not a 3-minute spike
+    d._mom_thread = True                                                # as in the live background loop
+    d._momentum_arm({}, [])
+    held = d.logger.positions("open", "momentum")
+    add = [x for x in held if x.parent == r.id]
+    assert len(add) == 1
+    assert add[0].cost_usd == pytest.approx(r.cost_usd * 0.5, rel=0.01)
+    assert add[0].stop_price == pytest.approx(add[0].entry_price * 0.92)   # tighter -8% stop
+    why = d.logger.db.execute("SELECT detail FROM events WHERE kind='decision' AND reason='BUY' "
+                              "ORDER BY ts DESC").fetchone()[0]
+    assert why.startswith("re-add")
+    d._momentum_arm({}, [])                                             # one add-on at a time
+    assert len([x for x in d.logger.positions("open", "momentum") if x.parent == r.id]) == 1
+
+
+def test_momentum_no_readd_if_not_clearly_higher_or_falling(tmp_path):
+    p0 = mom_pair()
+    d, dex = _mom_desk(tmp_path, [p0])
+    d.scan_cycle()
+    [p] = d.logger.positions("open", "momentum")
+    dex.set_price(p.mint, p.entry_price * 1.26)
+    d.risk.history.clear()
+    d.risk.monitor(d.executor, threading.RLock())
+    [r] = d.logger.positions("open", "momentum")
+    p0["priceUsd"] = str(r.sells[-1]["price"] * 1.04)                  # only +4% above our sell
+    d._mom_thread = True
+    d._momentum_arm({}, [])
+    assert not [x for x in d.logger.positions("open", "momentum") if x.parent]
+    p0["priceUsd"], p0["priceChange"]["m5"] = str(r.sells[-1]["price"] * 1.2), -3   # higher, but falling now
+    d._momentum_arm({}, [])
+    assert not [x for x in d.logger.positions("open", "momentum") if x.parent]

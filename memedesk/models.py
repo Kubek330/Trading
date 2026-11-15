@@ -178,6 +178,7 @@ class Position:
     creator: str = ""
     price_misses: int = 0
     sells: list = field(default_factory=list)   # [{ts, qty, price, usd, reason}]
+    parent: str = ""                             # momentum re-add: id of the position it adds to
 
     @property
     def pnl_usd(self) -> float | None:

@@ -24,6 +24,8 @@ class MomentumPick:
     trail: list[str] = field(default_factory=list)
     book: str = "momentum"
     score: float | None = None
+    addon_of: str = ""                   # re-add into a runner: parent position id
+    size_cap_usd: float | None = None
 
 
 def mom_quality(c: Candidate, cfg: Config) -> float:

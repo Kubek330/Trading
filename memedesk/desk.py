@@ -240,6 +240,9 @@ class Desk:
             why = f"random pick {pick.index + 1}/{pick.pool_size}"
         elif book == "sniper":
             why = f"snipe · {c.age_h * 60:.0f}m old · momentum {pick.momentum:.0f}"
+        elif book == "momentum" and getattr(pick, "addon_of", ""):
+            why = (f"re-add · still rising after our sell · {c.price_change.get('m5', 0):+.0f}% 5m · "
+                   f"momentum {pick.momentum:.0f}")
         elif book == "momentum":
             why = (f"momentum {pick.momentum:.0f} · {c.price_change.get('m5', 0):+.0f}% 5m · "
                    f"{c.price_change.get('h1', 0):+.0f}% 1h")
@@ -294,14 +297,67 @@ class Desk:
             res = self.enter(pick)
             out[f"sniper_{res}"] = out.get(f"sniper_{res}", 0) + 1
 
+    def _momentum_readds(self, pool: dict, out: dict) -> None:
+        """After selling 75%, buy back in (half size, tighter stop) if the coin keeps rising with healthy flow."""
+        cfg = self.cfg
+        mine = self.logger.positions(book="momentum")
+        runners = [p for p in mine if p.status == "open" and p.tp_taken and not p.parent and p.sells]
+        if not runners:
+            return
+        need = [p.mint for p in runners if p.mint not in pool]
+        if need:
+            from .agents.scout import candidate_from_pair
+            try:
+                for m, pr in self.dex.best_pair_per_mint(self.dex.pairs_for_mints(need), need).items():
+                    pool[m] = candidate_from_pair(pr, ["momentum-runner"])
+            except DataError:
+                pass
+        for r in runners:
+            adds = [p for p in mine if p.parent == r.id]
+            if len(adds) >= cfg.mom_max_readds or any(p.status == "open" for p in adds):
+                continue
+            c = pool.get(r.mint)
+            if c is None or c.price_usd <= 0:
+                continue
+            last_sell = max(r.sells, key=lambda x: x.get("ts", 0)).get("price") or 0
+            if not last_sell or c.price_usd < last_sell * (1 + cfg.mom_readd_above_pct / 100):
+                continue
+            m5 = c.price_change.get("m5", 0.0)
+            tx = c.txns.get("m5", {})
+            b, s = tx.get("buys", 0), tx.get("sells", 0)
+            ratio = b / s if s else 9.0
+            if not 0 < m5 <= cfg.mom_max_m5_pct or b + s < cfg.mom_min_txns_m5 or ratio < cfg.mom_min_buy_sell_m5:
+                continue
+            hist = self.risk.history.get(r.id) or []
+            recent = [px for ts, px in hist if time.time() - ts <= cfg.mom_spike_window_s]
+            if recent and c.price_usd / min(recent) - 1 >= cfg.mom_spike_pct / 100:
+                continue                              # mid-spike: that is where we sell, not buy
+            v = self.mom_filter.run(c)
+            if isinstance(v, Kill):
+                continue
+            pick = self.momentum.pick(v)
+            pick.addon_of, pick.size_cap_usd = r.id, r.cost_usd * cfg.mom_readd_size_frac
+            res = self.enter(pick)
+            out[f"momentum_readd_{res}"] = out.get(f"momentum_readd_{res}", 0) + 1
+
     def _momentum_arm(self, out: dict, in_window: list[Candidate]) -> None:
         if not self.momentum:
             return
         pool: dict[str, Candidate] = {}
-        seeds = self._mom_seeds or [*in_window, *self.scout.small, *(self._young_cands or self.scout.young)]
+        if self._mom_thread:
+            # background loop: only seeds handed over by the latest scan; everything else is re-priced by the
+            # tracker. (Never reuse the scout's lists here: they can be minutes old and would mask fresh prices.)
+            seeds = self._mom_seeds
+        else:
+            seeds = self._mom_seeds or [*in_window, *self.scout.small, *(self._young_cands or self.scout.young)]
         self._mom_seeds = []                      # consumed; the tracker keeps them
         for c in self.momentum.candidates(seeds):
             pool.setdefault(c.mint, c)
+        if self.cfg.mom_readd:
+            try:
+                self._momentum_readds(pool, out)
+            except Exception:
+                log.exception("momentum re-add failed")
         passed = []
         with self.working("momentum"):
             for c in pool.values():

@@ -67,7 +67,10 @@ class Executor:
             liq = max(liq, curve_liq_estimate(float(q.get("mcap") or c.mcap or 0)))
         rules = self.cfg.rules(book)
         size = min(equity_usd * pct / 100, liq * rules.max_pool_impact_pct / 100, cash_usd)
-        if size < rules.min_trade_usd:
+        addon = bool(getattr(pick, "addon_of", ""))
+        if addon and getattr(pick, "size_cap_usd", None):
+            size = min(size, pick.size_cap_usd)
+        if size < (self.cfg.min_trade_usd if addon else rules.min_trade_usd):
             return kill("too_thin" if size < equity_usd * pct / 100 else "size_too_small",
                         f"size ${size:.2f} < ${rules.min_trade_usd:g} (cash ${cash_usd:.2f}, liq ${liq:,.0f})", cooldown=5)
         return OrderTicket(pick=pick, book=book, size_usd=round(size, 2), ref_price=px,
@@ -95,6 +98,7 @@ class Executor:
             entry_liq_usd=0.0 if (c.dex_id or "").lower() in _curve_dexes() else c.liquidity_usd,
             opened_ts=time.time(), last_price=fill.price,
             creator=t.pick.vetted.facts.creator or "",
+            parent=getattr(t.pick, "addon_of", "") or "",
         )
         self.logger.save_position(pos)
         return pos

@@ -160,12 +160,14 @@ class Risk:
         rules = self.cfg.rules(t.book)
         if len(mine) >= rules.max_open_positions:
             return kill("max_positions", f"{len(mine)} open in {t.book}", cooldown=5)
-        if any(p.mint == t.mint for p in mine):
+        addon = bool(getattr(t.pick, "addon_of", ""))
+        if any(p.mint == t.mint for p in mine) and not addon:
             return kill("already_holding", f"already open in {t.book}", cooldown=60)
         cap = t.equity_usd * HARD_MAX_POSITION_PCT / 100
         if t.size_usd > cap + 1e-6:
             return kill("oversize", f"${t.size_usd:.2f} > 8% cap ${cap:.2f}")
-        return RiskApproval(ticket_id=t.id, stop_pct=rules.stop_pct, max_size_usd=min(cap, t.size_usd))
+        stop = self.cfg.mom_readd_stop_pct if addon else rules.stop_pct
+        return RiskApproval(ticket_id=t.id, stop_pct=stop, max_size_usd=min(cap, t.size_usd))
 
     # ---- live management --------------------------------------------------
     def _confirm_stop(self, p: Position, price: float, action):
