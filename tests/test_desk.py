@@ -1057,3 +1057,9 @@ def test_momentum_deep_gap_through_stop_sells_at_once(tmp_path):
     dex.set_price(p.mint, p.entry_price * 0.75)                       # 13% under the stop: looks like a rug
     d.risk.monitor(d.executor, threading.RLock())
     assert d.logger.positions("closed", "momentum")[0].exit_reason == "stop_loss"
+
+
+def test_momentum_does_not_chase_a_vertical_candle(tmp_path):
+    d, _ = _mom_desk(tmp_path, [mom_pair(m5=28)])                      # +28% in 5 min: the spike itself
+    d.scan_cycle()
+    assert "too_late" in kills(d, "momentum") and not d.logger.positions("open", "momentum")

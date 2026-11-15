@@ -165,8 +165,8 @@ class Config:
     mom_min_liq: float = 5_000.0             # not applied on bonding curves (DexScreener shows ~$0 there)
     mom_min_txns_m5: int = 10
     mom_min_buy_sell_m5: float = 1.2
-    mom_max_m5_pct: float = 60.0
-    mom_max_h1_pct: float = 300.0
+    mom_max_m5_pct: float = 20.0             # do not buy a vertical candle (WANTED: bought after the spike, -33%)
+    mom_max_h1_pct: float = 150.0
     mom_max_entries_per_scan: int = 2        # per scan when already at the target
     mom_target_positions: int = 4            # try to hold this many at once (fills up to it per scan)
     mom_min_quality: float = 40.0            # momentum score 0-100 a coin needs, free slot or not

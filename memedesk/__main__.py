@@ -81,7 +81,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.cmd == "positions":
             for p in lg.positions()[-args.n:]:
                 pnl = f"{p.pnl_pct:+.1f}%" if p.pnl_pct is not None else f"open {p.unrealized_pct:+.1f}%"
-                score = f"{p.score:5.1f}" if p.score is not None else "  rnd"
+                score = f"{p.score:5.1f}" if p.score is not None else f"{p.book[:3]:>5}"
                 print(f"{p.book:6} {p.status:6} {p.symbol[:10]:10} score {score} cost ${p.cost_usd:7.2f} "
                       f"entry {p.entry_price:.6g} stop {p.stop_price:.6g} tp={'Y' if p.tp_taken else 'n'} "
                       f"exit={p.exit_reason} {pnl}")
