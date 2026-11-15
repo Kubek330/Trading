@@ -62,7 +62,7 @@ def main(argv: list[str] | None = None) -> int:
                 print("rate-limited by: " + ", ".join(f"{k} {v}" for k, v in sorted(lim.items(), key=lambda kv: -kv[1])))
         for book, label in (("", "main desk filter (shared)"), ("scored", "analyst / scored book"),
                             ("random", "random book"), ("sniper", "sniper book"),
-                            ("momentum", "momentum book")):
+                            ("momentum", "momentum book"), ("ai", "AI book")):
             rows = q("SELECT agent, reason, COUNT(*) n, MAX(detail) FROM kills WHERE ts>=? AND book=? "
                      "AND agent!='scout' GROUP BY agent, reason ORDER BY n DESC LIMIT 6", book)
             buys = q("SELECT COUNT(*) FROM events WHERE kind='decision' AND reason='BUY' AND ts>=? "

@@ -130,7 +130,7 @@ class NoGrok:
         return ""
 
 
-def make_desk(tmp_path, pairs=None, rep=None, rpc=None, bundles=None, gecko=None, jup=None, **cfg_over):
+def make_desk(tmp_path, pairs=None, rep=None, rpc=None, bundles=None, gecko=None, jup=None, llm=None, **cfg_over):
     cfg_over.setdefault("random_seed", 7)
     cfg_over.setdefault("profile", "strict")
     cfg = Config(data_dir=str(tmp_path), **cfg_over)
@@ -138,7 +138,7 @@ def make_desk(tmp_path, pairs=None, rep=None, rpc=None, bundles=None, gecko=None
     dex = FakeDex(pairs or [pair()])
     d = Desk(cfg, dex=dex, gecko=gecko or FakeGecko(), rpc=rpc or FakeRPC(),
              rug=FakeRug(report() if rep is None else rep), bundles=bundles or FakeBundles(),
-             grok=NoGrok(), smart_wallets={"SmartA", "SmartB"}, jup=jup or FakeJup())
+             grok=NoGrok(), smart_wallets={"SmartA", "SmartB"}, jup=jup or FakeJup(), llm=llm)
     # pre-seed a holder snapshot 30 min ago so holder growth is measurable
     d.logger.db.execute("INSERT INTO holders(mint,ts,holders) VALUES(?,?,?)", (GOOD, time.time() - 1800, 2000))
     d.logger.db.commit()
@@ -1137,3 +1137,87 @@ def test_momentum_tracker_keeps_active_coins_over_new_dead_ones():
         c = candidate_from_pair(mom_pair(i), ["pp_new"]); c.volume["h1"] = 50
         m.candidates([c])
     assert busy.mint in m.track and len(m.track) == 3
+
+
+class FakeLLM:
+    enabled = True
+
+    def __init__(self, reply):
+        self.reply, self.seen = reply, []
+
+    def json(self, system, user):
+        import json as _j
+        self.seen.append(_j.loads(user))
+        return self.reply(self.seen[-1]) if callable(self.reply) else self.reply
+
+
+def _ai_desk(tmp_path, pairs, llm, **kw):
+    return _mom_desk(tmp_path, pairs, llm=llm, gemini_api_key="test", **kw)
+
+
+def test_ai_buys_what_it_chooses_even_without_filters(tmp_path):
+    p = mom_pair(m5=-4)                                                 # momentum would never buy this
+    llm = FakeLLM(lambda s: {"buys": [{"mint": s["candidates"][0]["mint"], "size_pct": 6,
+                                       "reason": "I like the holder spread"}], "sells": []})
+    d, _ = _ai_desk(tmp_path, [p], llm, rpc=FakeRPC(mint_auth="StillLive1"))   # unsafe: mint authority live
+    d.scan_cycle()
+    d.ai_tick()
+    shown = llm.seen[0]["candidates"][0]
+    assert shown["safety"]["mint_authority_revoked"] is False           # it was told...
+    [pos] = d.logger.positions("open", "ai")                              # ...and decided anyway
+    assert pos.cost_usd == pytest.approx(60.0)
+    why = d.logger.db.execute("SELECT detail FROM events WHERE kind='decision' AND reason='BUY' "
+                              "AND data LIKE '%\"book\":\"ai\"%'").fetchone()[0]
+    assert why == "AI 6% · I like the holder spread"
+
+
+def test_ai_sells_on_its_own_and_ignores_made_up_mints(tmp_path):
+    p = mom_pair()
+    state = {"n": 0}
+
+    def reply(s):
+        state["n"] += 1
+        if state["n"] == 1:
+            return {"buys": [{"mint": s["candidates"][0]["mint"], "size_pct": 4, "reason": "go"},
+                             {"mint": "NotARealMint111111111111111111111111111", "size_pct": 8, "reason": "x"}],
+                    "sells": []}
+        return {"buys": [], "sells": [{"id": s["open_positions"][0]["id"], "reason": "momentum faded"}]}
+
+    d, _ = _ai_desk(tmp_path, [p], FakeLLM(reply))
+    d.scan_cycle()
+    d.ai_tick()
+    assert len(d.logger.positions("open", "ai")) == 1                   # the invented mint was ignored
+    d.ai_tick()
+    [c] = d.logger.positions("closed", "ai")
+    assert c.exit_reason == "ai_sell"
+
+
+def test_ai_book_only_exists_with_a_key(tmp_path):
+    assert "ai" not in Config().books and "ai" in Config(gemini_api_key="k").books
+    r = Config().rules("ai")
+    assert r.stop_pct == 35 and r.tp_trigger_pct > 1e6 and r.max_hold_h == 6
+
+
+def test_gemini_client_parses_json_and_falls_back_to_an_available_model():
+    from memedesk.http import DataError
+    from memedesk.sources.llm import Gemini
+
+    class H:
+        def __init__(self):
+            self.urls = []
+
+        def post(self, url, **kw):
+            self.urls.append(url)
+            if "old-model" in url:
+                raise DataError("HTTP 404 from generativelanguage.googleapis.com: not found")
+            return {"candidates": [{"content": {"parts": [{"text": '```json\n{"buys": [], "sells": []}\n```'}]}}]}
+
+        def get(self, url, **kw):
+            return {"models": [{"name": "models/gemini-9-flash", "supportedGenerationMethods": ["generateContent"]},
+                               {"name": "models/gemini-9-flash-lite", "supportedGenerationMethods": ["generateContent"]},
+                               {"name": "models/embedding-1", "supportedGenerationMethods": ["embedContent"]}]}
+
+    h = H()
+    g = Gemini(h, "key", "old-model")
+    assert g.json("sys", "user") == {"buys": [], "sells": []}
+    assert g.model == "gemini-9-flash" and h.urls[-1].endswith("gemini-9-flash:generateContent")

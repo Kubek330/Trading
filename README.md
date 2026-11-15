@@ -124,6 +124,15 @@ A "buy what's rising" book, the opposite of the strict main desk. It has its own
 
 Comparing Momentum with the Desk book on the dashboard shows whether buying often beats being picky, after slippage and fees.
 
+## AI book (separate experiment)
+
+An LLM trades its own $1000 paper book. It is off until `GEMINI_API_KEY` is set; a free key comes from aistudio.google.com.
+- **Every minute** it sees the 10 most-traded coins from the momentum watchlist and its own open positions. For each coin it gets live DEX data (age, mcap, liquidity, price changes, buys/sells, volume) and the on-chain safety facts (mint/freeze authority, LP lock, top-10 holders, dev holdings, past rugs, bundles, holder count, Jupiter organic score and suspicious flag).
+- **It decides alone:** which coins to buy, how much (1–8% of the book), and which positions to sell. No filter blocks it; it is told what looks like a scam and has to notice that itself. Every decision is logged with its reason on the AI tab.
+- **Code still does** the simulated fills (same slippage and fees as the other books), the 8% hard cap, an emergency stop at −35% and a 6 h max hold, because the AI only looks once a minute. Set `DESK_AI_STOP_PCT=99` to turn the stop off.
+- **Privacy:** only public coin data is sent; free-tier Gemini may use prompts to improve Google's models.
+- **Switching models later** (e.g. to a paid Claude model) is a change of the client class in `memedesk/sources/llm.py`; the book itself stays the same.
+
 ## Does scoring beat luck?
 
 The dashboard and the report compare the two books: win rate, average and median return per trade, take-profit hits, and equity. They also run a Welch t-test on per-trade returns. Until each book has **20+ closed trades**, the verdict reads "too early". After that, a t-value above 2 means the score is adding edge over the filter alone. A t-value between −2 and 2 means it hasn't shown any edge yet.

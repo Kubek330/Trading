@@ -25,7 +25,8 @@ EXIT_LABELS = {"stop_loss": "stop loss", "take_profit": "take profit 75%", "runn
                "runner_breakeven": "breakeven exit", "max_hold": "48h max hold", "liq_crash": "liquidity crash",
                "pool_vanished": "pool vanished", "dump_exit": "dump detected", "stale_rotate": "rotated out (stalled)",
                "chop_take_profit": "small profit, sideways",
-               "spike_take_profit": "sold into spike"}
+               "spike_take_profit": "sold into spike",
+               "ai_sell": "AI sold"}
 PRICE_MISS_LIMIT = 20  # consecutive ticks with no price => pool treated as gone
 
 
@@ -215,7 +216,7 @@ class Risk:
                 action, events = step(p, price, q["liq"], now, self.cfg.rules(p.book))
                 if p.book == "momentum":
                     action = self._confirm_stop(p, price, action)
-                if action is None:
+                if action is None and p.book != "ai":
                     action = dump_check(p, price, q.get("pair") or {}, self.cfg)
                 hist = self.history.setdefault(p.id, deque(maxlen=200))
                 hist.append((now, price))

@@ -205,6 +205,16 @@ class Config:
     mom_max_hold_h: float = 4.0
     mom_max_open_positions: int = 6
 
+    # ---- AI book: an LLM decides buys, size and sells on its own (no filters) ----
+    ai: bool = True                          # active when GEMINI_API_KEY is set
+    gemini_api_key: str = ""                 # free key: aistudio.google.com -> Get API key
+    ai_model: str = ""                       # empty = gemini-2.5-flash, or the newest flash model on the key
+    ai_interval_s: float = 60.0              # one LLM call per minute (fits free-tier limits)
+    ai_candidates: int = 10                  # most-traded coins shown to the AI per call
+    ai_stop_pct: float = 35.0                # emergency stop only (the AI looks once a minute); 99 = off
+    ai_max_hold_h: float = 6.0
+    ai_max_open: int = 6
+
     # ---- executor ---------------------------------------------------------
     position_pct: float = 8.0                # of the book's equity; clamped to 8
     max_pool_impact_pct: float = 1.0         # size <= this % of pool liquidity
@@ -274,7 +284,8 @@ class Config:
                 continue
             raw = os.environ.get(f"DESK_{f.name.upper()}")
             if raw is None and f.name in {"xai_api_key", "telegram_bot_token", "telegram_chat_id",
-                                          "helius_api_key", "jup_api_key", "coingecko_api_key"}:
+                                          "helius_api_key", "jup_api_key", "coingecko_api_key",
+                                          "gemini_api_key"}:
                 raw = os.environ.get(f.name.upper())
             if raw is None or raw == "":
                 continue
@@ -315,11 +326,16 @@ class Config:
     @property
     def books(self) -> list[str]:
         return (["scored"] + (["random"] if self.random_control else []) + (["sniper"] if self.sniper else [])
-                + (["momentum"] if self.momentum else []))
+                + (["momentum"] if self.momentum else []) + (["ai"] if self.ai and self.gemini_api_key else []))
 
     def rules(self, book: str) -> "Config":
         """Exit/sizing rules for a book. Sniper and momentum have their own; scored and random share the main ones."""
         from dataclasses import replace
+        if book == "ai":
+            return replace(self, stop_pct=self.ai_stop_pct, tp_trigger_pct=1e9, max_hold_h=self.ai_max_hold_h,
+                           max_open_positions=self.ai_max_open, position_pct=HARD_MAX_POSITION_PCT,
+                           liq_crash_exit_pct=100.0, max_pool_impact_pct=self.mom_max_pool_impact_pct,
+                           min_trade_usd=self.min_trade_usd)
         if book == "momentum":
             return replace(self, stop_pct=self.mom_stop_pct, tp_trigger_pct=self.mom_tp_trigger_pct,
                            tp_sell_pct=self.mom_tp_sell_pct, runner_trail_pct=self.mom_runner_trail_pct,

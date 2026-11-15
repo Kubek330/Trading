@@ -32,7 +32,7 @@ from .agents.whale_scout import WhaleScout
 from .broker.paper import PaperBroker
 from .config import Config
 from .http import DataError, HttpClient
-from .models import Candidate, Kill, RandomPick, Scorecard, Vetted
+from .models import Candidate, Kill, RandomPick, SafetyFacts, Scorecard, Vetted
 from .sources.bundles import BundleChecker
 from .sources.chain import ChainReader
 from .sources.dexscreener import DexScreener
@@ -44,12 +44,13 @@ from .sources.solana_rpc import SolanaRPC
 
 log = logging.getLogger("memedesk")
 
-AGENTS = ["whale_scout", "scout", "filter", "analyst", "executor", "risk", "logger", "random", "sniper", "momentum"]
+AGENTS = ["whale_scout", "scout", "filter", "analyst", "executor", "risk", "logger", "random", "sniper", "momentum",
+          "ai"]
 
 
 class Desk:
     def __init__(self, cfg: Config, *, http=None, dex=None, gecko=None, rpc=None, rug=None,
-                 bundles=None, grok=None, logger=None, smart_wallets=None, chain=None, jup=None):
+                 bundles=None, grok=None, logger=None, smart_wallets=None, chain=None, jup=None, llm=None):
         self.cfg = cfg
         self.http = http or HttpClient(timeout=cfg.http_timeout_s, rpm={
             "api.mainnet-beta.solana.com": cfg.rpc_rpm, "mainnet.helius-rpc.com": 500, "api.helius.xyz": 100,
@@ -64,6 +65,8 @@ class Desk:
             self.agents["sniper"]["state"] = "off"
         if not cfg.momentum:
             self.agents["momentum"]["state"] = "off"
+        if "ai" not in cfg.books:
+            self.agents["ai"]["state"] = "off"
         self.logger.listeners.append(self._on_event)
         own_dex = dex is None
         self.dex = dex = dex or DexScreener(self.http, cfg.dexscreener_url)
@@ -109,6 +112,13 @@ class Desk:
                                          max_h1_change_pct=1e9, min_liq_mcap_pct=0.0, min_organic_score=0.0),
                                  rpc, rug, bundles, self.logger, jup=self.jup) if cfg.momentum else None
         self._young_cands: list[Candidate] = []
+        self._mom_pool: dict[str, Candidate] = {}
+        self.ai = None
+        if "ai" in cfg.books:
+            from .agents.ai_trader import AITrader
+            from .sources.llm import Gemini
+            self.ai = AITrader(cfg, llm or Gemini(self.http, cfg.gemini_api_key, cfg.ai_model))
+        self.ai_filter = Filter(cfg, rpc, rug, bundles, self.logger, jup=self.jup)   # facts only, never kills
         self._mom_seeds: list[Candidate] = []
         self._mom_thread = False
         self.executor = Executor(cfg, self.broker, dex, self.logger)
@@ -241,6 +251,8 @@ class Desk:
             why = f"random pick {pick.index + 1}/{pick.pool_size}"
         elif book == "sniper":
             why = f"snipe · {c.age_h * 60:.0f}m old · momentum {pick.momentum:.0f}"
+        elif book == "ai":
+            why = f"AI {pick.size_pct:g}% · {pick.reason}"
         elif book == "momentum" and getattr(pick, "addon_of", ""):
             why = (f"re-add · still rising after our sell · {c.price_change.get('m5', 0):+.0f}% 5m · "
                    f"momentum {pick.momentum:.0f}")
@@ -298,6 +310,72 @@ class Desk:
             res = self.enter(pick)
             out[f"sniper_{res}"] = out.get(f"sniper_{res}", 0) + 1
 
+    # ---- AI book --------------------------------------------------------------
+    def ai_tick(self) -> dict:
+        """One LLM decision round: show the AI the most-traded coins (with safety facts) and its positions."""
+        if not self.ai:
+            return {}
+        cfg, now = self.cfg, time.time()
+        held = self.logger.positions("open", "ai")
+        held_mints = {p.mint for p in held}
+        pool = self._mom_pool or {c.mint: c for c in [*self.scout.small, *self.scout.young]}
+        ranked = sorted((c for c in pool.values() if c.mint not in held_mints and c.age_h * 60 >= 3
+                         and not self._blocked(c.mint, "ai")),
+                        key=lambda c: c.volume.get("h1", 0.0), reverse=True)[: cfg.ai_candidates]
+        from .agents.ai_trader import candidate_payload
+        facts, payload = {}, []
+        for c in ranked:
+            try:
+                facts[c.mint] = self.ai_filter.gather(c)
+            except Exception:
+                facts[c.mint] = None
+            payload.append(candidate_payload(c, facts[c.mint]))
+        positions = []
+        for p in held:
+            last = (self.risk.quotes.get(p.mint) or {}).get("price") or p.last_price or p.entry_price
+            positions.append({"id": p.id, "symbol": p.symbol, "mint": p.mint,
+                              "pnl_pct": round((last / p.entry_price - 1) * 100, 1),
+                              "peak_pnl_pct": round((p.peak_price / p.entry_price - 1) * 100, 1),
+                              "held_min": round((now - p.opened_ts) / 60)})
+        if not payload and not positions:
+            return {"ai": "nothing to look at"}
+        with self.working("ai"):
+            d = self.ai.decide(payload, positions)
+        out = {"buys": 0, "sells": 0}
+        for s in d["sells"]:
+            p = next((x for x in held if x.id == s["id"]), None)
+            if not p:
+                continue
+            price = (self.risk.quotes.get(p.mint) or {}).get("price") or p.last_price or p.entry_price
+            self.logger.event("ai", "think", p.mint, p.symbol, "sell", str(s.get("reason", ""))[:160])
+            self.risk._act(self.executor, self.trade_lock, p, ("exit", 1.0, "ai_sell"), price, now)
+            out["sells"] += 1
+        by_mint = {c.mint: c for c in ranked}
+        for b in d["buys"]:
+            c = by_mint.get(b["mint"])
+            if c is None:
+                continue                                  # only coins it was shown
+            pick = self.ai.pick(c, facts.get(c.mint) or SafetyFacts(*([None] * 9)), b.get("size_pct"),
+                                b.get("reason", ""))
+            res = self.enter(pick)
+            out["buys"] += res == "entered"
+        self.logger.event("ai", "decide", reason=f"{len(payload)} shown",
+                          detail=f"{len(d['buys'])} buy / {len(d['sells'])} sell ideas · {out}", data=out)
+        return out
+
+    def _ai_loop(self) -> None:
+        self.stop_event.wait(45)
+        while not self.stop_event.is_set():
+            t0 = time.time()
+            try:
+                self.ai_tick()
+            except DataError as e:
+                if "shutting down" not in str(e):
+                    self.logger.event("ai", "error", reason="llm", detail=str(e)[:200], level=logging.WARNING)
+            except Exception:
+                log.exception("ai tick failed")
+            self.stop_event.wait(max(10.0, self.cfg.ai_interval_s - (time.time() - t0)))
+
     def _momentum_readds(self, pool: dict, out: dict) -> None:
         """After selling 75%, buy back in (half size, tighter stop) if the coin keeps rising with healthy flow."""
         cfg = self.cfg
@@ -354,6 +432,7 @@ class Desk:
         self._mom_seeds = []                      # consumed; the tracker keeps them
         for c in self.momentum.candidates(seeds):
             pool.setdefault(c.mint, c)
+        self._mom_pool = dict(pool)                  # shared with the AI book (no extra DexScreener calls)
         if self.cfg.mom_readd:
             try:
                 self._momentum_readds(pool, out)
@@ -598,6 +677,8 @@ class Desk:
             threads.append(threading.Thread(target=self._whale_loop, name="whale", daemon=True))
         if self.pumpportal is not None:
             self.pumpportal.start(self.stop_event)
+        if self.ai:
+            threads.append(threading.Thread(target=self._ai_loop, name="ai", daemon=True))
         if self.momentum:
             self._mom_thread = True
             threads.append(threading.Thread(target=self._momentum_loop, name="momentum", daemon=True))

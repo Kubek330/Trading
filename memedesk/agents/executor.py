@@ -20,7 +20,7 @@ TICKET_TTL_S = 60.0
 def _curve_dexes():
     from .filter import BONDING_CURVE_DEXES
     return BONDING_CURVE_DEXES
-UPSTREAM = {"scored": "analyst", "random": "random", "sniper": "sniper", "momentum": "momentum"}
+UPSTREAM = {"scored": "analyst", "random": "random", "sniper": "sniper", "momentum": "momentum", "ai": "ai"}
 
 
 class Executor:
@@ -53,15 +53,19 @@ class Executor:
         m5 = float((q["pair"].get("priceChange") or {}).get("m5") or 0)
         tx5 = (q["pair"].get("txns") or {}).get("m5") or {}
         b5, s5 = int(tx5.get("buys") or 0), int(tx5.get("sells") or 0)
-        if m5 < -self.cfg.entry_max_m5_drop_pct:
+        if book == "ai":
+            pass                                          # the AI decides on its own: no entry rules
+        elif m5 < -self.cfg.entry_max_m5_drop_pct:
             return kill("dipping_now", f"{m5:.1f}% over the last 5m", cooldown=2)
-        if b5 + s5 >= 10 and s5 and b5 / s5 < self.cfg.entry_min_buy_sell_m5:
+        elif b5 + s5 >= 10 and s5 and b5 / s5 < self.cfg.entry_min_buy_sell_m5:
             return kill("sellers_now", f"5m buy/sell {b5}/{s5}", cooldown=2)
         h1 = float((q["pair"].get("priceChange") or {}).get("h1") or 0)
-        if book not in ("sniper", "momentum") and h1 > self.cfg.max_h1_change_pct:  # sniper judges brand-new coins by its own m5 rules
+        if book not in ("sniper", "momentum", "ai") and h1 > self.cfg.max_h1_change_pct:  # sniper judges brand-new coins by its own m5 rules
             return kill("pumped_1h", f"+{h1:.0f}% in 1h at requote", cooldown=60)
 
         pct = min(self.cfg.rules(book).position_pct, HARD_MAX_POSITION_PCT)
+        if book == "ai":
+            pct = min(float(getattr(pick, "size_pct", 3.0)), HARD_MAX_POSITION_PCT)   # the AI picks its size
         from .filter import BONDING_CURVE_DEXES, curve_liq_estimate, on_bonding_curve
         if (q["pair"].get("dexId") or "").lower() in BONDING_CURVE_DEXES or on_bonding_curve(c):
             liq = max(liq, curve_liq_estimate(float(q.get("mcap") or c.mcap or 0)))

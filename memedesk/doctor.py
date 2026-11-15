@@ -34,6 +34,10 @@ def checks(cfg: Config):
         out.append(("CoinGecko Demo", "optional: backup when GeckoTerminal says 429", "GET",
                     "https://api.coingecko.com/api/v3/onchain/networks/solana/trending_pools", None,
                     {"x-cg-demo-api-key": cfg.coingecko_api_key}, lambda d: "key works"))
+    if cfg.gemini_api_key:
+        out.append(("Gemini (AI book)", "optional: the AI book's brain", "GET",
+                    "https://generativelanguage.googleapis.com/v1beta/models", None,
+                    {"x-goog-api-key": cfg.gemini_api_key}, lambda d: f"{len(d.get('models', []))} models on this key"))
     if cfg.helius_api_key:
         out.append(("Helius enhanced API", "optional: fast whale-scout reads", "GET",
                     f"https://api.helius.xyz/v0/addresses/{BONK}/transactions?api-key={cfg.helius_api_key}&limit=1",
