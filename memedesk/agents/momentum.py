@@ -35,8 +35,43 @@ class Momentum:
     name = "momentum"
     book = "momentum"
 
-    def __init__(self, cfg: Config):
-        self.cfg = cfg
+    def __init__(self, cfg: Config, dex=None):
+        self.cfg, self.dex = cfg, dex
+        self.track: dict[str, float] = {}       # mint -> first seen
+        self.tags: dict[str, set[str]] = {}     # mint -> discovery tags (e.g. "trending")
+
+    def candidates(self, seeds: list[Candidate]) -> list[Candidate]:
+        """Every coin seen recently, re-checked each scan: this scan's coins plus tracked ones refreshed from
+        DexScreener. A coin that starts moving between scans is caught, not missed for 30 min."""
+        import time as _t
+        cfg, now = self.cfg, _t.time()
+        fresh: dict[str, Candidate] = {}
+        for c in seeds:
+            if c.mint and c.age_h <= cfg.mom_max_age_h:
+                self.track.setdefault(c.mint, now)
+                self.tags.setdefault(c.mint, set()).update(c.sources or [])
+                fresh.setdefault(c.mint, c)
+        for m in [m for m, t0 in self.track.items() if now - t0 > cfg.mom_track_hours * 3600]:
+            self.track.pop(m, None)
+            self.tags.pop(m, None)
+        if len(self.track) > cfg.mom_track_max:                    # keep the newest
+            for m in sorted(self.track, key=self.track.get)[: len(self.track) - cfg.mom_track_max]:
+                self.track.pop(m, None)
+                self.tags.pop(m, None)
+        stale = [m for m in self.track if m not in fresh]
+        if stale and self.dex is not None:
+            from .scout import candidate_from_pair
+            try:
+                best = self.dex.best_pair_per_mint(self.dex.pairs_for_mints(stale), stale)
+            except Exception:
+                best = {}
+            for m, p in best.items():
+                c = candidate_from_pair(p, sorted(self.tags.get(m, set())) + ["momentum-track"], now)
+                if c.age_h > cfg.mom_max_age_h or (c.age_h > 1 and c.mcap < cfg.mom_min_mcap / 4):
+                    self.track.pop(m, None)                         # aged out, or a dead launch
+                    continue
+                fresh[m] = c
+        return list(fresh.values())
 
     def prefilter(self, c: Candidate) -> Kill | None:
         cfg = self.cfg

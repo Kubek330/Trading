@@ -883,3 +883,18 @@ def test_trending_bonus_only_tips_the_balance():
     c = candidate_from_pair(mom_pair(m5=1, buys=22, sells=15), ["geckoterminal"])
     t = candidate_from_pair(mom_pair(m5=1, buys=22, sells=15), ["geckoterminal", "trending"])
     assert mom_quality(t, cfg) == pytest.approx(mom_quality(c, cfg) + 10)
+
+
+def test_momentum_keeps_watching_and_buys_when_a_coin_starts_moving_later(tmp_path):
+    p = mom_pair(m5=-2)                                                  # not moving on first sight
+    d, dex = _mom_desk(tmp_path, [p])
+    d.scan_cycle()
+    assert not d.logger.positions("open", "momentum")
+    dex.discover_mints = lambda: []                                      # gone from every discovery feed
+    p["priceChange"]["m5"] = 7                                           # ...and now it starts to run
+    d.logger.db.execute("DELETE FROM cooldowns")
+    d.logger.db.commit()
+    out = d.scan_cycle()
+    assert out.get("momentum_entered") == 1, kills(d, "momentum")
+    src = d.logger.positions("open", "momentum")[0]
+    assert src.symbol == "MOM0" and p["baseToken"]["address"] in d.momentum.track

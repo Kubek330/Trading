@@ -90,7 +90,7 @@ class Desk:
                                             max_bundle_pct=cfg.sniper_max_bundle_pct, max_h1_change_pct=1e9,
                                             min_organic_score=cfg.sniper_min_organic_score),
                                     rpc, rug, bundles, self.logger, jup=self.jup) if cfg.sniper else None
-        self.momentum = Momentum(cfg) if cfg.momentum else None
+        self.momentum = Momentum(cfg, dex) if cfg.momentum else None
         # hard safety only: authorities / LP (or curve) / rugged / holders / dev; no bundle, organic or 1h-pump rules
         self.mom_filter = Filter(replace(cfg, profile="active", max_top10_pct=cfg.mom_max_top10_pct,
                                          max_dev_pct=cfg.mom_max_dev_pct, max_bundle_pct=100.0,
@@ -278,7 +278,8 @@ class Desk:
         if not self.momentum:
             return
         pool: dict[str, Candidate] = {}
-        for c in [*in_window, *self.scout.small, *(self._young_cands or self.scout.young)]:
+        seeds = [*in_window, *self.scout.small, *(self._young_cands or self.scout.young)]
+        for c in self.momentum.candidates(seeds):
             pool.setdefault(c.mint, c)
         passed = []
         with self.working("momentum"):

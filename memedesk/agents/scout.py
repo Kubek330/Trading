@@ -60,6 +60,10 @@ class Scout:
                     found.setdefault(m, []).append("geckoterminal")
                 for m in getattr(self.gecko, "trending", ()):
                     found.setdefault(m, []).append("trending")
+                # most-traded pools (already fetched for the whale scout, cached 15 min: no extra calls)
+                if hasattr(self.gecko, "discover_pools"):
+                    for p in self.gecko.discover_pools():
+                        found.setdefault(p["mint"], []).append("volume")
             except DataError as e:
                 log.warning("geckoterminal discovery failed: %s", e)
         return found
@@ -85,6 +89,7 @@ class Scout:
         return None
 
     def run(self, skip=lambda mint: False) -> tuple[list[Candidate], list[Kill]]:
+        self.young, self.small = [], []                  # never hand last scan's stale data downstream
         found = {m: s for m, s in self.discover().items() if not skip(m)}
         # watchlist: coins seen earlier (too young, too small, or already in the window) that are due a
         # re-check. Discovery feeds mostly list brand-new launches, which drop off them before turning 30m.
@@ -101,8 +106,8 @@ class Scout:
             return [], []
         now = time.time()
         passed, kills = [], []
-        self.young = []                                  # too-young coins: the sniper's hunting ground
-        self.small = []                                  # under the main desk's mcap floor: momentum still looks
+        # self.young: too-young coins (the sniper's hunting ground)
+        # self.small: under the main desk's mcap floor (momentum still looks)
         for mint, pair in best.items():
             c = candidate_from_pair(pair, found[mint], now)
             k = self.gate(c)
