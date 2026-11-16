@@ -234,6 +234,7 @@ python -m memedesk kills -n 100
 python -m memedesk doctor              # which data sources work from this device
 python -m memedesk why                 # top kill reasons per book in the last hour (--hours 6 for more)
 python -m memedesk evaluate            # is any book better than luck? (CI, vs random, shadow exits)
+python -m memedesk reset               # every book back to $1000 (--book momentum for one); stop the desk first
 python -m memedesk dashboard           # dashboard over saved data, no trading
 sqlite3 data/desk_paper.db "select agent, book, reason, count(*) from kills group by 1,2,3 order by 4 desc"
 ```
@@ -255,4 +256,4 @@ sqlite3 data/desk_paper.db "select agent, book, reason, count(*) from kills grou
 pip install pytest && python -m pytest -q
 ```
 
-There are 117 offline tests. They cover every filter kill rule (including top-10 holders with the pool vault excluded), the 8% cap, the −15% stop, the +35% partial sell, the runner trailing stop and its floor at entry, the 48h max hold, the Random arm's matched draws from filter survivors, handoff enforcement, the comparison verdicts, the dashboard server, HTTP backoff and caching, a check that only the standard library is imported, and Whale Scout: winner detection, wallet scoring/exclusions/add-drop reasons, whale-mode signals going through Filter/Analyst/Risk, both transaction parsers, signature paging, and pump.fun bonding-curve derivation. Newer tests cover the momentum and AI books, realistic costs, Token-2022 extension checks, insider-sell exits, rule versions, candidate forward returns, shadow exits and the `evaluate` statistics.
+There are 118 offline tests. They cover every filter kill rule (including top-10 holders with the pool vault excluded), the 8% cap, the −15% stop, the +35% partial sell, the runner trailing stop and its floor at entry, the 48h max hold, the Random arm's matched draws from filter survivors, handoff enforcement, the comparison verdicts, the dashboard server, HTTP backoff and caching, a check that only the standard library is imported, and Whale Scout: winner detection, wallet scoring/exclusions/add-drop reasons, whale-mode signals going through Filter/Analyst/Risk, both transaction parsers, signature paging, and pump.fun bonding-curve derivation. Newer tests cover the momentum and AI books, realistic costs, Token-2022 extension checks, insider-sell exits, rule versions, candidate forward returns, shadow exits and the `evaluate` statistics.

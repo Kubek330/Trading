@@ -280,3 +280,23 @@ def test_manual_sell_from_the_dashboard(tmp_path):
     reason = d.logger.db.execute("SELECT detail FROM events WHERE kind='decision' AND reason='SELL'").fetchone()[0]
     assert reason.startswith("sold by you")
     srv.shutdown()
+
+
+def test_reset_puts_books_back_to_start_and_keeps_history(tmp_path):
+    from memedesk.__main__ import main
+    from memedesk.broker.paper import reset_cash
+    d, dex = _mom_desk(tmp_path, [mom_pair(0), mom_pair(1)])
+    d.scan_cycle()
+    a, b = d.logger.positions("open", "momentum")
+    dex.set_price(a.mint, a.entry_price * 0.5)
+    d.risk.monitor(d.executor, threading.RLock())                       # one loss closed, one still open
+    d.logger.put("day_start:momentum:2026-11-16", 700.0)
+    assert d.equity("momentum")[0] < 1000
+    reset_cash(d.logger, ["momentum"], 1000.0)
+    assert d.equity("momentum")[0] == pytest.approx(1000.0)
+    assert len(d.logger.positions("closed", "momentum")) == 1 and len(d.logger.positions("open", "momentum")) == 1
+    assert d.logger.get("day_start:momentum:2026-11-16") is None
+    env = tmp_path / "x.env"
+    env.write_text(f"DESK_DATA_DIR={tmp_path}\n")
+    assert main(["reset", "--env", str(env), "--book", "nope"]) == 2
+    assert main(["reset", "--env", str(env)]) == 0

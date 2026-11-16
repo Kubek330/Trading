@@ -69,3 +69,23 @@ class PaperBroker:
         proceeds = qty * ref_price * (1 - self.book_slip.get(book, self.slip)) * (1 - self.fee)
         self.logger.put(f"cash:{book}", self.cash_usd(book) + proceeds)
         return Fill(price=proceeds / qty if qty else 0.0, qty=qty, usd=proceeds)
+
+
+def reset_cash(logger, books: list[str], start_usd: float) -> dict[str, tuple[float, float]]:
+    """Put each book back to `start_usd` of equity. Trade history is kept (for `evaluate`); open positions
+    stay open and count toward the new equity. Returns {book: (equity before, cash after)}."""
+    out = {}
+    for b in books:
+        opened = logger.positions("open", b)
+        held = sum(p.value_usd for p in opened)
+        before = float(logger.get(f"cash:{b}", start_usd) or 0.0) + held
+        cash = start_usd - held
+        logger.put(f"cash:{b}", cash)
+        logger.put(f"start:{b}", start_usd)
+        with logger.lock:                      # the daily loss limit restarts from the new equity
+            logger.db.execute("DELETE FROM account WHERE key LIKE ?", (f"day_start:{b}:%",))
+            logger.db.commit()
+        logger.event("desk", "reset", reason=b, detail=f"{b}: equity ${before:,.2f} -> ${start_usd:,.2f} "
+                     f"({len(opened)} open positions kept)", data={"book": b, "before": round(before, 2)})
+        out[b] = (before, cash)
+    return out

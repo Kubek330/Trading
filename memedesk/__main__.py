@@ -8,6 +8,7 @@
   python -m memedesk kills       # most recent kills with reasons
   python -m memedesk doctor      # test every data source from this device
   python -m memedesk why         # why nothing gets bought: top kill reasons per book (last --hours, default 1)
+  python -m memedesk reset       # every book back to its start cash (--book momentum for one); history kept
   python -m memedesk evaluate    # per book: mean with 95% CI, vs random, per rule version, shadow exits
 """
 from __future__ import annotations
@@ -24,7 +25,8 @@ from .config import Config
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="memedesk")
     ap.add_argument("cmd", choices=["run", "once", "dashboard", "report", "positions", "kills", "doctor", "why",
-                                       "evaluate"])
+                                       "evaluate", "reset"])
+    ap.add_argument("--book", default=None, help="reset: only this book")
     ap.add_argument("--env", default=".env")
     ap.add_argument("--hours", type=float, default=None)
     ap.add_argument("-n", type=int, default=40)
@@ -38,6 +40,20 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "doctor":
         from .doctor import run as doctor
         return doctor(cfg)
+
+    if args.cmd == "reset":
+        from .agents.logger import Logger
+        from .broker.paper import reset_cash
+        lg = Logger(cfg.data_dir)
+        books = [args.book] if args.book else cfg.books
+        bad = [b for b in books if b not in cfg.books]
+        if bad:
+            print(f"unknown book {bad[0]!r}; books: {', '.join(cfg.books)}")
+            return 2
+        for b, (before, cash) in reset_cash(lg, books, cfg.paper_start_usd).items():
+            print(f"{b:9} ${before:,.2f} -> ${cfg.paper_start_usd:,.2f} (cash ${cash:,.2f})")
+        print("done. trade history is kept; `evaluate` still sees every trade.")
+        return 0
 
     if args.cmd == "evaluate":
         from .agents.logger import Logger
